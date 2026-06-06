@@ -1,6 +1,6 @@
 {
   "name": "noa-core",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "description": "NoA - Noetic Advisor desktop intelligence layer. Visually NoA, spoken as Noah.",
   "author": "TruShot Media",
   "private": true,
@@ -35,30 +35,11 @@
   "build": {
     "appId": "com.trushotmedia.noa",
     "productName": "NoA",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*",
-      "package.json"
-    ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "TruShotMedia",
-        "repo": "noa-core"
-      }
-    ],
-    "win": {
-      "target": "nsis",
-      "icon": "public/icon.ico"
-    },
-    "mac": {
-      "target": "dmg",
-      "icon": "public/icon.icns",
-      "category": "public.app-category.productivity"
-    },
+    "directories": { "output": "release" },
+    "files": ["dist/**/*", "electron/**/*", "package.json"],
+    "publish": [{ "provider": "github", "owner": "TruShotMedia", "repo": "noa-core" }],
+    "win": { "target": "nsis" },
+    "mac": { "target": "dmg", "category": "public.app-category.productivity" },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,

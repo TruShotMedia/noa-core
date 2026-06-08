@@ -2,16 +2,15 @@
 
 NoA is the visual desktop interface for Noah, the spoken Noetic Advisor.
 
-This is the Windows and Mac desktop foundation for the NoA ecosystem.
+## Alpha 0.2
 
-## Includes
+This update improves the first product shell:
 
-- Electron desktop shell
-- React + TypeScript + Vite app
-- Premium NoA command centre UI
-- Dashboard, Chat, Integrations, Network and Settings screens
-- GitHub Releases update plumbing through `electron-updater`
-- Windows NSIS and Mac DMG packaging config
+- Premium command centre dashboard
+- Local shell chat mode
+- Integration health cards
+- Animated network core prototype
+- Settings page with update-check hook
 
 ## Development
 
@@ -20,12 +19,8 @@ npm install
 npm run dev
 ```
 
-## Build installers
+## Build
 
 ```bash
-npm run dist
+npm run dist:mac
 ```
-
-## Notes
-
-For early alpha, app icons are intentionally not configured yet so installer builds do not fail because of missing icon files.

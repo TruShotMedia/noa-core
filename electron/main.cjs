@@ -4,13 +4,14 @@ const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
+const DEFAULT_MODEL = 'gpt-4.1-mini';
 
 let mainWindow;
 let diagnostics = {
   provider: 'Local fallback',
   brainOnline: false,
   apiKeySaved: false,
-  model: 'gpt-4.1-mini',
+  model: DEFAULT_MODEL,
   lastIntent: 'none',
   lastConfidence: 0,
   lastApiRequestAt: null,
@@ -23,8 +24,22 @@ let diagnostics = {
   lastToolName: 'none',
   lastToolStatus: 'idle',
   lastToolLatencyMs: null,
-  lastToolError: null
+  lastToolError: null,
+  settingsPath: null,
+  settingsWritable: false,
+  devUrl: null,
+  keyMasked: 'Not saved'
 };
+
+function defaultStore() {
+  return {
+    openaiApiKey: '',
+    openaiModel: DEFAULT_MODEL,
+    memories: [],
+    webSearchProvider: 'duckduckgo-lite',
+    lastSettingsSaveAt: null
+  };
+}
 
 function getStorePath() {
   return path.join(app.getPath('userData'), 'noa-settings.json');
@@ -33,37 +48,56 @@ function getStorePath() {
 function readStore() {
   try {
     const file = getStorePath();
-    if (!fs.existsSync(file)) {
-      return { openaiApiKey: '', openaiModel: 'gpt-4.1-mini', memories: [], webSearchProvider: 'duckduckgo-lite' };
-    }
-    return JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!fs.existsSync(file)) return defaultStore();
+    return { ...defaultStore(), ...JSON.parse(fs.readFileSync(file, 'utf8')) };
   } catch (_error) {
-    return { openaiApiKey: '', openaiModel: 'gpt-4.1-mini', memories: [], webSearchProvider: 'duckduckgo-lite' };
+    return defaultStore();
   }
 }
 
 function writeStore(next) {
   const current = readStore();
-  const merged = { ...current, ...next };
+  const merged = { ...current, ...next, lastSettingsSaveAt: new Date().toISOString() };
+
   fs.mkdirSync(path.dirname(getStorePath()), { recursive: true });
   fs.writeFileSync(getStorePath(), JSON.stringify(merged, null, 2), 'utf8');
   updateDiagnosticsFromStore(merged);
   return safeSettings(merged);
 }
 
+function maskKey(key) {
+  if (!key) return 'Not saved';
+  const start = key.slice(0, 7);
+  const end = key.slice(-4);
+  return `${start}${'•'.repeat(12)}${end}`;
+}
+
 function safeSettings(settings = readStore()) {
   return {
-    openaiModel: settings.openaiModel || 'gpt-4.1-mini',
+    openaiModel: settings.openaiModel || DEFAULT_MODEL,
     hasOpenAIKey: Boolean(settings.openaiApiKey),
+    openaiKeyLabel: maskKey(settings.openaiApiKey),
     memoryCount: Array.isArray(settings.memories) ? settings.memories.length : 0,
-    webSearchProvider: settings.webSearchProvider || 'duckduckgo-lite'
+    webSearchProvider: settings.webSearchProvider || 'duckduckgo-lite',
+    lastSettingsSaveAt: settings.lastSettingsSaveAt || null
   };
 }
 
 function updateDiagnosticsFromStore(settings = readStore()) {
   diagnostics.apiKeySaved = Boolean(settings.openaiApiKey);
-  diagnostics.model = settings.openaiModel || 'gpt-4.1-mini';
+  diagnostics.model = settings.openaiModel || DEFAULT_MODEL;
   diagnostics.memoryEntries = Array.isArray(settings.memories) ? settings.memories.length : 0;
+  diagnostics.settingsPath = getStorePath();
+  diagnostics.keyMasked = maskKey(settings.openaiApiKey);
+  diagnostics.devUrl = process.env.NOA_DEV_URL || 'http://127.0.0.1:5173';
+
+  try {
+    fs.mkdirSync(path.dirname(getStorePath()), { recursive: true });
+    fs.accessSync(path.dirname(getStorePath()), fs.constants.W_OK);
+    diagnostics.settingsWritable = true;
+  } catch (_error) {
+    diagnostics.settingsWritable = false;
+  }
 }
 
 function createWindow() {
@@ -82,7 +116,7 @@ function createWindow() {
   });
 
   if (isDev) {
-    mainWindow.loadURL('http://127.0.0.1:5173');
+    mainWindow.loadURL(process.env.NOA_DEV_URL || 'http://127.0.0.1:5173');
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
@@ -107,7 +141,7 @@ ipcMain.handle('noa:save-settings', async (_event, settings) => {
   const current = readStore();
   const next = {
     ...current,
-    openaiModel: settings.openaiModel || current.openaiModel || 'gpt-4.1-mini',
+    openaiModel: settings.openaiModel || current.openaiModel || DEFAULT_MODEL,
     webSearchProvider: settings.webSearchProvider || current.webSearchProvider || 'duckduckgo-lite'
   };
 
@@ -142,7 +176,7 @@ ipcMain.handle('noa:test-openai', async () => {
   try {
     const text = await callOpenAI({
       apiKey: settings.openaiApiKey,
-      model: settings.openaiModel || 'gpt-4.1-mini',
+      model: settings.openaiModel || DEFAULT_MODEL,
       input: 'Reply with exactly: NoA OpenAI diagnostics online.'
     });
 
@@ -182,7 +216,7 @@ ipcMain.handle('noa:chat', async (_event, payload) => {
       source: 'local_tool',
       intent: route.intent,
       confidence: route.confidence,
-      text: `Got it - I’ll remember that. ${memory ? `I’ve saved: “${memory}”.` : 'I’ve saved that note into my local memory.'}`
+      text: `Absolutely - I’ll remember that. ${memory ? `I’ve saved: “${memory}”.` : 'I’ve saved that note into my local memory.'}`
     };
   }
 
@@ -211,7 +245,7 @@ ipcMain.handle('noa:chat', async (_event, payload) => {
     const prompt = buildNoahPrompt({ message, history, toolContext });
     const text = await callOpenAI({
       apiKey: settings.openaiApiKey,
-      model: settings.openaiModel || 'gpt-4.1-mini',
+      model: settings.openaiModel || DEFAULT_MODEL,
       input: prompt
     });
 
@@ -242,7 +276,7 @@ ipcMain.handle('noa:chat', async (_event, payload) => {
       source: diagnostics.lastResponseSource,
       intent: route.intent,
       confidence: route.confidence,
-      text: `${localFallbackResponse(route.intent, toolContext)}\n\nI also tried to reach OpenAI, but that request failed. Check Diagnostics for the exact error.`
+      text: `${localFallbackResponse(route.intent, toolContext)}\n\nI tried to reach my OpenAI brain as well, but the request failed. The Diagnostics page will show the exact error.`
     };
   }
 });
@@ -259,10 +293,10 @@ ipcMain.handle('noa:check-for-updates', async () => {
 
 function routeIntent(message) {
   const m = message.toLowerCase();
+  if (m.includes('what do you remember') || m.includes('memory')) return { intent: 'memory_lookup', confidence: 88 };
   if (m.includes('remember')) return { intent: 'remember', confidence: 92 };
   if (m.includes('weather') || m.includes('forecast') || m.includes('temperature') || m.includes('rain')) return { intent: 'weather_lookup', confidence: 91 };
   if (m.includes('search') || m.includes('look up') || m.includes('latest') || m.includes('google') || m.includes('web')) return { intent: 'web_search', confidence: 82 };
-  if (m.includes('what do you remember') || m.includes('memory')) return { intent: 'memory_lookup', confidence: 86 };
   if (m.includes('status') || m.includes('diagnostic') || m.includes('online')) return { intent: 'system_status', confidence: 84 };
   if (m.includes('tool') || m.includes('what can you use')) return { intent: 'tool_list', confidence: 88 };
   if (m.includes('today') || m.includes('attention') || m.includes('priority') || m.includes('briefing')) return { intent: 'todays_briefing', confidence: 82 };
@@ -388,7 +422,7 @@ function buildToolContext(intent, settings, diag, toolResult) {
     diagnostics: {
       provider: diag.provider,
       apiKeySaved: Boolean(settings.openaiApiKey),
-      model: settings.openaiModel || 'gpt-4.1-mini',
+      model: settings.openaiModel || DEFAULT_MODEL,
       toolsRegistered: diag.toolsRegistered,
       memoryEntries: memories.length,
       lastToolName: diag.lastToolName,
@@ -425,22 +459,23 @@ function buildNoahPrompt({ message, history, toolContext }) {
       content: [
         'You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.',
         'NoA is the visual system name. Noah is the natural voice/conversation identity.',
-        'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.',
-        'Avoid ending replies with intent/confidence unless the user asks for technical detail.',
-        'Be honest about what is real and what is still mocked/prototype data.',
-        'Use toolResult data when provided. If weather data is provided, answer with the actual weather values and mention the provider briefly.',
-        'If a webSearchLite result is limited, say that the current web tool is limited and recommend connecting a stronger search provider.',
-        'Keep replies practical, conversational and useful.'
+        'Your tone should feel close to ChatGPT: warm, conversational, clear and human.',
+        'Do not talk like a diagnostic terminal.',
+        'Do not mention intent, confidence, routing, tool names or provider internals unless John asks for technical detail.',
+        'Be honest about what is real and what is still prototype data.',
+        'Use toolResult data when provided. If weather data is provided, answer with actual weather values.',
+        'If a tool is limited, explain that simply and offer the next practical improvement.',
+        'Keep replies natural, helpful and concise.'
       ].join('\n')
     },
     {
       role: 'user',
       content: [
-        `Current user message: ${message}`,
+        `John said: ${message}`,
         '',
         `Recent conversation: ${JSON.stringify(history)}`,
         '',
-        `NoA tool/context state: ${JSON.stringify(toolContext, null, 2)}`
+        `NoA context and tool data: ${JSON.stringify(toolContext, null, 2)}`
       ].join('\n')
     }
   ];
@@ -494,7 +529,7 @@ function formatWeather(toolResult) {
 function localFallbackResponse(intent, context) {
   if (intent === 'weather_lookup') {
     if (context.toolResult?.ok) return formatWeather(context.toolResult);
-    return `I tried to use the weather tool, but it failed: ${context.toolResult?.error || context.toolResult?.note || 'Unknown issue'}.`;
+    return `I tried to check the weather, but the tool failed: ${context.toolResult?.error || context.toolResult?.note || 'Unknown issue'}.`;
   }
 
   if (intent === 'web_search') {
@@ -506,7 +541,7 @@ function localFallbackResponse(intent, context) {
   }
 
   if (intent === 'system_status') {
-    return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather lookup and lightweight web search are active in Alpha 0.7.';
+    return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather lookup and lightweight web search are active in Alpha 0.8.';
   }
 
   if (intent === 'tool_list') {

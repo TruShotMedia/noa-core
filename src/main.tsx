@@ -1,15 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { Command, Cpu, DownloadCloud, Loader2, Lock, MessageSquareText, PlugZap, Send, Shield, Sparkles, TerminalSquare, Zap } from 'lucide-react';
+import { Command, Cpu, Database, DownloadCloud, Loader2, Lock, MessageSquareText, Pin, PlugZap, Save, Search, Send, Shield, Sparkles, TerminalSquare, Trash2, Zap } from 'lucide-react';
 import { dashboardCards, integrations, navItems, priorities } from './data/system';
 import { noaSettings } from './config/settings';
 import { getOpenAISettings, saveOpenAISettings, testOpenAIConnection, type OpenAISettings } from './services/ai/openai';
 import { routeCommand } from './services/commandRouter';
-import { clearMemory, getRecentMemory } from './services/memory/memoryStore';
+import { addMemoryEntry, clearMemory, deleteMemory, getAllMemory, getContextProfile, getMemoryStats, saveContextProfile, searchMemory } from './services/memory/memoryStore';
+import type { ContextProfile } from './types/noa';
 import { toolRegistry } from './services/tools/registry';
 import './styles/app.css';
 
-type Screen = 'dashboard' | 'chat' | 'integrations' | 'network' | 'settings';
+type Screen = 'dashboard' | 'chat' | 'memory' | 'integrations' | 'network' | 'settings';
 type Message = { role: 'noa' | 'john'; text: string };
 
 function App() {
@@ -17,10 +18,12 @@ function App() {
   const [command, setCommand] = useState('');
   const [isRouting, setIsRouting] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'noa', text: 'Noah online. NoA Alpha 0.4 Brain Layer is active. Enable OpenAI in Settings to let me reason over local tool results.' }
+    { role: 'noa', text: 'Noah online. NoA Alpha 0.5 Memory Engine is active. I can now save notes, search local memory and use your context profile.' }
   ]);
   const [updateStatus, setUpdateStatus] = useState('Ready');
-  const [memoryCount, setMemoryCount] = useState(getRecentMemory(100).length);
+  const [memoryRefresh, setMemoryRefresh] = useState(0);
+
+  const memoryStats = useMemo(() => getMemoryStats(), [memoryRefresh]);
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -28,6 +31,8 @@ function App() {
     if (hour < 18) return 'Good afternoon, John.';
     return 'Good evening, John.';
   }, []);
+
+  const refreshMemory = () => setMemoryRefresh((value) => value + 1);
 
   const submitCommand = async () => {
     if (!command.trim() || isRouting) return;
@@ -43,7 +48,7 @@ function App() {
         ...current,
         { role: 'noa', text: `${routed.response}\n\nIntent: ${routed.intent}${routed.toolUsed ? `\nTool used: ${routed.toolUsed}` : ''}\nConfidence: ${Math.round(routed.confidence * 100)}%` }
       ]);
-      setMemoryCount(getRecentMemory(100).length);
+      refreshMemory();
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -62,7 +67,7 @@ function App() {
 
   const resetMemory = () => {
     clearMemory();
-    setMemoryCount(0);
+    refreshMemory();
   };
 
   return (
@@ -80,7 +85,7 @@ function App() {
             );
           })}
         </nav>
-        <div className="rail-status"><span /> Brain Layer</div>
+        <div className="rail-status"><span /> Memory</div>
       </aside>
 
       <section className="workspace">
@@ -90,40 +95,41 @@ function App() {
             <h1>{screenTitle(screen)}</h1>
           </div>
           <div className="top-actions">
-            <div className="status-pill"><Shield size={16} /> Alpha 0.4</div>
-            <div className="status-pill muted"><Lock size={16} /> AI bridge</div>
+            <div className="status-pill"><Shield size={16} /> Alpha 0.5</div>
+            <div className="status-pill muted"><Lock size={16} /> Memory engine</div>
           </div>
         </header>
 
-        {screen === 'dashboard' && <Dashboard greeting={greeting} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} />}
+        {screen === 'dashboard' && <Dashboard greeting={greeting} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} memoryTotal={memoryStats.total} />}
         {screen === 'chat' && <Chat messages={messages} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} />}
+        {screen === 'memory' && <Memory refreshMemory={refreshMemory} memoryRefresh={memoryRefresh} />}
         {screen === 'integrations' && <Integrations />}
-        {screen === 'network' && <Network />}
-        {screen === 'settings' && <Settings checkForUpdates={checkForUpdates} updateStatus={updateStatus} memoryCount={memoryCount} resetMemory={resetMemory} />}
+        {screen === 'network' && <Network memoryTotal={memoryStats.total} />}
+        {screen === 'settings' && <Settings checkForUpdates={checkForUpdates} updateStatus={updateStatus} memoryCount={memoryStats.total} resetMemory={resetMemory} />}
       </section>
     </main>
   );
 }
 
-function Dashboard({ greeting, command, setCommand, submitCommand, isRouting }: { greeting: string; command: string; setCommand: (value: string) => void; submitCommand: () => void; isRouting: boolean }) {
+function Dashboard({ greeting, command, setCommand, submitCommand, isRouting, memoryTotal }: { greeting: string; command: string; setCommand: (value: string) => void; submitCommand: () => void; isRouting: boolean; memoryTotal: number }) {
   return (
     <section className="dashboard page-fade">
       <div className="hero-grid">
         <div className="hero-card">
           <p className="eyebrow">Noah voice identity - NoA visual system</p>
           <h2>{greeting}</h2>
-          <p>NoA now has its first OpenAI Brain Layer. Local tools still run first, then Noah can reason over tool output when OpenAI is enabled.</p>
+          <p>NoA now has its first Memory and Context Engine. Noah can save notes, search local memory and use your core profile while routing commands through tools and the OpenAI Brain Layer.</p>
           <div className="command-card hero-command">
             <Command size={20} />
-            <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Ask Noah what needs your attention today..." />
+            <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Try: Noah, remember that TruShot Media needs a retainer workflow..." />
             <button onClick={submitCommand} disabled={isRouting}>{isRouting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
           </div>
         </div>
         <div className="core-card">
-          <div className="orb"><Cpu size={58} /></div>
-          <h3>NoA Core</h3>
-          <p>Tool Engine active. OpenAI bridge ready.</p>
-          <div className="meter"><span style={{ width: '68%' }} /></div>
+          <div className="orb"><Database size={58} /></div>
+          <h3>Memory Core</h3>
+          <p>{memoryTotal} local memories active.</p>
+          <div className="meter"><span style={{ width: '78%' }} /></div>
         </div>
       </div>
 
@@ -134,7 +140,7 @@ function Dashboard({ greeting, command, setCommand, submitCommand, isRouting }: 
             <article className="glass-card" key={card.label}>
               <Icon size={22} />
               <p>{card.label}</p>
-              <h3>{card.value}</h3>
+              <h3>{card.label === 'Memory' ? `${memoryTotal} entries` : card.value}</h3>
               <span>{card.detail}</span>
             </article>
           );
@@ -161,17 +167,93 @@ function Chat({ messages, command, setCommand, submitCommand, isRouting }: { mes
         <MessageSquareText size={24} />
         <div>
           <h2>Conversation with Noah</h2>
-          <p>Alpha 0.4 can route through local tools, then use OpenAI to turn tool output into a more natural Noah response.</p>
+          <p>Alpha 0.5 can route through local tools, save/search memory, and use your context profile when OpenAI is enabled.</p>
         </div>
       </div>
       <div className="chat-log">
         {messages.map((message, index) => <div key={index} className={`bubble ${message.role}`}>{message.text}</div>)}
-        {isRouting && <div className="bubble noa">Routing command through tools and brain layer...</div>}
+        {isRouting && <div className="bubble noa">Routing command through tools, memory and brain layer...</div>}
       </div>
       <div className="command-card docked">
         <Sparkles size={20} />
-        <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Try: Noah, system status" />
+        <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Try: What do you remember about NoA?" />
         <button onClick={submitCommand} disabled={isRouting}>{isRouting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
+      </div>
+    </section>
+  );
+}
+
+function Memory({ refreshMemory, memoryRefresh }: { refreshMemory: () => void; memoryRefresh: number }) {
+  const [query, setQuery] = useState('');
+  const [newNote, setNewNote] = useState('');
+  const [profile, setProfile] = useState<ContextProfile>(getContextProfile());
+  const entries = useMemo(() => query.trim() ? searchMemory(query, 20) : getAllMemory(), [query, memoryRefresh]);
+  const stats = useMemo(() => getMemoryStats(), [memoryRefresh]);
+
+  const saveNote = () => {
+    if (!newNote.trim()) return;
+    addMemoryEntry({ type: 'note', title: newNote.trim().slice(0, 64), content: newNote.trim(), tags: ['manual'] });
+    setNewNote('');
+    refreshMemory();
+  };
+
+  const saveProfile = () => {
+    saveContextProfile(profile);
+    addMemoryEntry({ type: 'preference', title: 'Context profile updated', content: 'John updated the NoA context profile.', tags: ['profile'] });
+    refreshMemory();
+  };
+
+  const removeEntry = (id: string) => {
+    deleteMemory(id);
+    refreshMemory();
+  };
+
+  return (
+    <section className="memory page-fade">
+      <div className="memory-layout">
+        <article className="glass-card memory-panel">
+          <Database size={24} />
+          <h3>Memory Engine</h3>
+          <p>NoA now keeps local context in this app. This is the prototype before Supabase cloud memory.</p>
+          <div className="memory-stats">
+            <span>{stats.total} entries</span>
+            <span>{stats.pinned} pinned</span>
+            <span>{Object.keys(stats.byType).length} types</span>
+          </div>
+          <div className="command-card compact">
+            <Search size={18} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search memory..." />
+          </div>
+          <textarea className="note-box" value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Add a memory note manually..." />
+          <button className="primary" onClick={saveNote}><Save size={16} /> Save memory note</button>
+        </article>
+
+        <article className="glass-card memory-panel profile-panel">
+          <Sparkles size={24} />
+          <h3>Context Profile</h3>
+          <p>This is the always-available context Noah uses when responding.</p>
+          <label className="settings-field"><span>Name</span><input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></label>
+          <label className="settings-field"><span>Mission</span><textarea value={profile.mission} onChange={(e) => setProfile({ ...profile, mission: e.target.value })} /></label>
+          <label className="settings-field"><span>Preferred tone</span><textarea value={profile.preferredTone} onChange={(e) => setProfile({ ...profile, preferredTone: e.target.value })} /></label>
+          <button className="primary" onClick={saveProfile}><Save size={16} /> Save context profile</button>
+        </article>
+      </div>
+
+      <div className="memory-list">
+        {entries.map((entry) => (
+          <article className="memory-entry" key={entry.id}>
+            <div>
+              <div className="memory-entry-head">
+                {entry.pinned && <Pin size={14} />}
+                <strong>{entry.title || entry.type}</strong>
+                <span>{entry.type}</span>
+              </div>
+              <p>{entry.content}</p>
+              <small>{new Date(entry.createdAt).toLocaleString()} {(entry.tags || []).map((tag) => `#${tag}`).join(' ')}</small>
+            </div>
+            {!entry.pinned && <button className="icon-button" onClick={() => removeEntry(entry.id)}><Trash2 size={16} /></button>}
+          </article>
+        ))}
       </div>
     </section>
   );
@@ -196,20 +278,20 @@ function Integrations() {
   );
 }
 
-function Network() {
-  const nodes = ['OpenAI', 'Supabase', 'Optra', 'Notion', 'Gmail', 'Calendar', 'Xero', 'Meta', 'Spotify', 'Tools'];
+function Network({ memoryTotal }: { memoryTotal: number }) {
+  const nodes = ['OpenAI', 'Memory', 'Supabase', 'Optra', 'Notion', 'Gmail', 'Calendar', 'Xero', 'Meta', 'Tools'];
   return (
     <section className="network page-fade">
       <div className="scanline" />
       <div className="network-panel left">
         <p className="eyebrow">Live topology</p>
         <h3>System graph</h3>
-        <p>Local Tool Engine now connects to the OpenAI Brain Layer. Live integrations come next.</p>
+        <p>Memory now sits between Noah, the Tool Engine and future integrations.</p>
       </div>
       <div className="network-panel right">
         <p className="eyebrow">Engine state</p>
         <h3>{toolRegistry.length} tools active</h3>
-        <p>{toolRegistry.map((tool) => tool.label).join(', ')}</p>
+        <p>{memoryTotal} local memories. {toolRegistry.map((tool) => tool.label).join(', ')}</p>
       </div>
       <div className="network-core"><span>NoA</span><small>Core</small></div>
       {nodes.map((node, index) => <div key={node} className={`network-node n${index + 1}`}>{node}</div>)}
@@ -217,7 +299,6 @@ function Network() {
     </section>
   );
 }
-
 
 function Settings({ checkForUpdates, updateStatus, memoryCount, resetMemory }: { checkForUpdates: () => void; updateStatus: string; memoryCount: number; resetMemory: () => void }) {
   const [openAISettings, setOpenAISettings] = useState<OpenAISettings>(getOpenAISettings());
@@ -240,23 +321,11 @@ function Settings({ checkForUpdates, updateStatus, memoryCount, resetMemory }: {
       <article className="glass-card wide">
         <Sparkles size={24} />
         <h3>OpenAI Brain Layer</h3>
-        <p>Enable OpenAI to let Noah reason over local tool results. Your key is stored locally on this computer during alpha development.</p>
-        <label className="settings-field">
-          <span>Enable OpenAI</span>
-          <input type="checkbox" checked={openAISettings.enabled} onChange={(e) => setOpenAISettings({ ...openAISettings, enabled: e.target.checked })} />
-        </label>
-        <label className="settings-field">
-          <span>Model</span>
-          <input value={openAISettings.model} onChange={(e) => setOpenAISettings({ ...openAISettings, model: e.target.value })} placeholder="gpt-5.5" />
-        </label>
-        <label className="settings-field">
-          <span>API key</span>
-          <input type="password" value={openAISettings.apiKey || ''} onChange={(e) => setOpenAISettings({ ...openAISettings, apiKey: e.target.value })} placeholder="sk-..." />
-        </label>
-        <div className="settings-actions">
-          <button className="primary" onClick={saveAI}>Save OpenAI settings</button>
-          <button className="primary" onClick={testAI}>Test connection</button>
-        </div>
+        <p>Enable OpenAI to let Noah reason over local tool and memory results. Your key is stored locally on this computer during alpha development.</p>
+        <label className="settings-field"><span>Enable OpenAI</span><input type="checkbox" checked={openAISettings.enabled} onChange={(e) => setOpenAISettings({ ...openAISettings, enabled: e.target.checked })} /></label>
+        <label className="settings-field"><span>Model</span><input value={openAISettings.model} onChange={(e) => setOpenAISettings({ ...openAISettings, model: e.target.value })} placeholder="gpt-5.5" /></label>
+        <label className="settings-field"><span>API key</span><input type="password" value={openAISettings.apiKey || ''} onChange={(e) => setOpenAISettings({ ...openAISettings, apiKey: e.target.value })} placeholder="sk-..." /></label>
+        <div className="settings-actions"><button className="primary" onClick={saveAI}>Save OpenAI settings</button><button className="primary" onClick={testAI}>Test connection</button></div>
         <span>{aiStatus}</span>
       </article>
       <article className="glass-card wide">
@@ -268,16 +337,16 @@ function Settings({ checkForUpdates, updateStatus, memoryCount, resetMemory }: {
       </article>
       <article className="glass-card wide">
         <TerminalSquare size={24} />
-        <h3>Tool Engine</h3>
+        <h3>Memory + Tool Engine</h3>
         <p>Mode: {noaSettings.mode}. Local memory entries: {memoryCount}. Available tools: {toolRegistry.length}.</p>
-        <button className="primary" onClick={resetMemory}>Clear local memory</button>
+        <button className="primary" onClick={resetMemory}>Reset local memory to starter context</button>
       </article>
     </section>
   );
 }
 
 function screenTitle(screen: Screen) {
-  return ({ dashboard: 'Command Centre', chat: 'Conversation', integrations: 'Integrations', network: 'Network Core', settings: 'Settings' } as const)[screen];
+  return ({ dashboard: 'Command Centre', chat: 'Conversation', memory: 'Memory Core', integrations: 'Integrations', network: 'Network Core', settings: 'Settings' } as const)[screen];
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

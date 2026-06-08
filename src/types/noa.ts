@@ -1,4 +1,10 @@
-export type ToolName = 'getTodaysBriefing' | 'getSystemStatus' | 'listAvailableTools';
+export type ToolName =
+  | 'getTodaysBriefing'
+  | 'getSystemStatus'
+  | 'listAvailableTools'
+  | 'rememberNote'
+  | 'searchMemory'
+  | 'getContextSnapshot';
 
 export type ToolExecutionContext = {
   input: string;
@@ -27,9 +33,26 @@ export type RouterResponse = {
   confidence: number;
 };
 
+export type MemoryType = 'command' | 'tool_result' | 'preference' | 'note' | 'business_context' | 'project' | 'client' | 'system';
+
 export type MemoryEntry = {
   id: string;
-  type: 'command' | 'tool_result' | 'preference' | 'note';
+  type: MemoryType;
+  title?: string;
   content: string;
+  tags?: string[];
+  pinned?: boolean;
   createdAt: string;
+  updatedAt?: string;
+};
+
+export type ContextProfile = {
+  name: string;
+  visualIdentity: string;
+  voiceIdentity: string;
+  mission: string;
+  primaryBusinesses: string[];
+  activeSystems: string[];
+  preferredTone: string;
+  updatedAt: string;
 };

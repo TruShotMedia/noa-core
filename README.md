@@ -2,14 +2,18 @@
 
 NoA is the visual desktop interface for Noah, the spoken Noetic Advisor.
 
-## Alpha 0.4
+## Alpha 0.5 - Memory & Context Engine
 
-Adds the OpenAI Brain Layer on top of the local Tool Engine.
+This build adds the first local memory system:
 
-- Local tools still run first
-- OpenAI can now explain/format tool outputs
-- Settings screen can save and test the API key
-- Electron main process handles OpenAI requests via IPC
+- Memory page
+- Context profile
+- Manual memory notes
+- Searchable local memory
+- Remember Note tool
+- Search Memory tool
+- Context Snapshot tool
+- OpenAI responses can now include NoA context
 
 ## Development
 

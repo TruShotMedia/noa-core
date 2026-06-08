@@ -40,6 +40,7 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('noa:get-version', () => app.getVersion());
+
 ipcMain.handle('noa:check-for-updates', async () => {
   if (isDev) return { status: 'dev-mode', message: 'Update checks run in packaged builds.' };
   try {
@@ -49,3 +50,59 @@ ipcMain.handle('noa:check-for-updates', async () => {
     return { status: 'error', message: error.message };
   }
 });
+
+ipcMain.handle('noa:openai-request', async (_event, payload) => {
+  const { apiKey, model, input } = payload || {};
+
+  if (!apiKey || !String(apiKey).trim()) {
+    return { ok: false, message: 'OpenAI API key is missing.' };
+  }
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-5.5',
+        input,
+        max_output_tokens: 700
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: response.status,
+        message: data?.error?.message || 'OpenAI request failed.',
+        data
+      };
+    }
+
+    return {
+      ok: true,
+      text: data.output_text || extractOutputText(data),
+      data
+    };
+  } catch (error) {
+    return { ok: false, message: error.message || 'OpenAI request failed.' };
+  }
+});
+
+function extractOutputText(data) {
+  try {
+    const output = data?.output || [];
+    return output
+      .flatMap((item) => item?.content || [])
+      .map((content) => content?.text || '')
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  } catch {
+    return '';
+  }
+}

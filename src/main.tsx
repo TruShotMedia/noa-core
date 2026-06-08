@@ -1,7 +1,12 @@
 import React, { useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { ArrowUpRight, Brain, CheckCircle2, Command, Cpu, DownloadCloud, Gauge, Loader2, Lock, MessageSquareText, PlugZap, RadioTower, Send, Shield, Sparkles, TerminalSquare, Zap } from 'lucide-react';
+import { Command, Cpu, DownloadCloud, Loader2, Lock, MessageSquareText, PlugZap, Send, Shield, Sparkles, TerminalSquare, Zap } from 'lucide-react';
 import { dashboardCards, integrations, navItems, priorities } from './data/system';
+import { noaSettings } from './config/settings';
+import { getOpenAISettings, saveOpenAISettings, testOpenAIConnection, type OpenAISettings } from './services/ai/openai';
+import { routeCommand } from './services/commandRouter';
+import { clearMemory, getRecentMemory } from './services/memory/memoryStore';
+import { toolRegistry } from './services/tools/registry';
 import './styles/app.css';
 
 type Screen = 'dashboard' | 'chat' | 'integrations' | 'network' | 'settings';
@@ -10,10 +15,12 @@ type Message = { role: 'noa' | 'john'; text: string };
 function App() {
   const [screen, setScreen] = useState<Screen>('dashboard');
   const [command, setCommand] = useState('');
+  const [isRouting, setIsRouting] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'noa', text: 'Noah online. NoA Alpha 0.2 shell is active. The next major system layer is OpenAI + tool routing.' }
+    { role: 'noa', text: 'Noah online. NoA Alpha 0.4 Brain Layer is active. Enable OpenAI in Settings to let me reason over local tool results.' }
   ]);
   const [updateStatus, setUpdateStatus] = useState('Ready');
+  const [memoryCount, setMemoryCount] = useState(getRecentMemory(100).length);
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -22,22 +29,40 @@ function App() {
     return 'Good evening, John.';
   }, []);
 
-  const submitCommand = () => {
-    if (!command.trim()) return;
+  const submitCommand = async () => {
+    if (!command.trim() || isRouting) return;
     const input = command.trim();
-    setMessages((current) => [
-      ...current,
-      { role: 'john', text: input },
-      { role: 'noa', text: 'Command received. I am currently running in local shell mode. In the next phase, this command will route through OpenAI, then into tools such as Optra, Notion, Calendar and Supabase memory.' }
-    ]);
     setCommand('');
     setScreen('chat');
+    setIsRouting(true);
+    setMessages((current) => [...current, { role: 'john', text: input }]);
+
+    try {
+      const routed = await routeCommand(input);
+      setMessages((current) => [
+        ...current,
+        { role: 'noa', text: `${routed.response}\n\nIntent: ${routed.intent}${routed.toolUsed ? `\nTool used: ${routed.toolUsed}` : ''}\nConfidence: ${Math.round(routed.confidence * 100)}%` }
+      ]);
+      setMemoryCount(getRecentMemory(100).length);
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        { role: 'noa', text: `I hit an error while routing that command. ${error instanceof Error ? error.message : 'Unknown error'}` }
+      ]);
+    } finally {
+      setIsRouting(false);
+    }
   };
 
   const checkForUpdates = async () => {
     setUpdateStatus('Checking...');
     const result = await window.noa?.checkForUpdates();
     setUpdateStatus(result?.message || result?.status || 'Unavailable in dev mode');
+  };
+
+  const resetMemory = () => {
+    clearMemory();
+    setMemoryCount(0);
   };
 
   return (
@@ -55,7 +80,7 @@ function App() {
             );
           })}
         </nav>
-        <div className="rail-status"><span /> Online</div>
+        <div className="rail-status"><span /> Brain Layer</div>
       </aside>
 
       <section className="workspace">
@@ -65,40 +90,40 @@ function App() {
             <h1>{screenTitle(screen)}</h1>
           </div>
           <div className="top-actions">
-            <div className="status-pill"><Shield size={16} /> Alpha 0.2</div>
-            <div className="status-pill muted"><Lock size={16} /> Local shell</div>
+            <div className="status-pill"><Shield size={16} /> Alpha 0.4</div>
+            <div className="status-pill muted"><Lock size={16} /> AI bridge</div>
           </div>
         </header>
 
-        {screen === 'dashboard' && <Dashboard greeting={greeting} command={command} setCommand={setCommand} submitCommand={submitCommand} />}
-        {screen === 'chat' && <Chat messages={messages} command={command} setCommand={setCommand} submitCommand={submitCommand} />}
+        {screen === 'dashboard' && <Dashboard greeting={greeting} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} />}
+        {screen === 'chat' && <Chat messages={messages} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} />}
         {screen === 'integrations' && <Integrations />}
         {screen === 'network' && <Network />}
-        {screen === 'settings' && <Settings checkForUpdates={checkForUpdates} updateStatus={updateStatus} />}
+        {screen === 'settings' && <Settings checkForUpdates={checkForUpdates} updateStatus={updateStatus} memoryCount={memoryCount} resetMemory={resetMemory} />}
       </section>
     </main>
   );
 }
 
-function Dashboard({ greeting, command, setCommand, submitCommand }: { greeting: string; command: string; setCommand: (value: string) => void; submitCommand: () => void }) {
+function Dashboard({ greeting, command, setCommand, submitCommand, isRouting }: { greeting: string; command: string; setCommand: (value: string) => void; submitCommand: () => void; isRouting: boolean }) {
   return (
     <section className="dashboard page-fade">
       <div className="hero-grid">
         <div className="hero-card">
           <p className="eyebrow">Noah voice identity - NoA visual system</p>
           <h2>{greeting}</h2>
-          <p>NoA is becoming the central intelligence layer for your businesses, displays, client systems, skills, integrations and future voice interaction.</p>
+          <p>NoA now has its first OpenAI Brain Layer. Local tools still run first, then Noah can reason over tool output when OpenAI is enabled.</p>
           <div className="command-card hero-command">
             <Command size={20} />
             <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Ask Noah what needs your attention today..." />
-            <button onClick={submitCommand}><Send size={18} /></button>
+            <button onClick={submitCommand} disabled={isRouting}>{isRouting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
           </div>
         </div>
         <div className="core-card">
           <div className="orb"><Cpu size={58} /></div>
           <h3>NoA Core</h3>
-          <p>Shell active. Tool engine pending.</p>
-          <div className="meter"><span style={{ width: '42%' }} /></div>
+          <p>Tool Engine active. OpenAI bridge ready.</p>
+          <div className="meter"><span style={{ width: '68%' }} /></div>
         </div>
       </div>
 
@@ -129,23 +154,24 @@ function Dashboard({ greeting, command, setCommand, submitCommand }: { greeting:
   );
 }
 
-function Chat({ messages, command, setCommand, submitCommand }: { messages: Message[]; command: string; setCommand: (value: string) => void; submitCommand: () => void }) {
+function Chat({ messages, command, setCommand, submitCommand, isRouting }: { messages: Message[]; command: string; setCommand: (value: string) => void; submitCommand: () => void; isRouting: boolean }) {
   return (
     <section className="chat page-fade">
       <div className="chat-intro">
         <MessageSquareText size={24} />
         <div>
           <h2>Conversation with Noah</h2>
-          <p>For now this is local shell mode. Next we connect OpenAI and the tool router.</p>
+          <p>Alpha 0.4 can route through local tools, then use OpenAI to turn tool output into a more natural Noah response.</p>
         </div>
       </div>
       <div className="chat-log">
         {messages.map((message, index) => <div key={index} className={`bubble ${message.role}`}>{message.text}</div>)}
+        {isRouting && <div className="bubble noa">Routing command through tools and brain layer...</div>}
       </div>
       <div className="command-card docked">
         <Sparkles size={20} />
-        <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Talk to Noah..." />
-        <button onClick={submitCommand}><Send size={18} /></button>
+        <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Try: Noah, system status" />
+        <button onClick={submitCommand} disabled={isRouting}>{isRouting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
       </div>
     </section>
   );
@@ -171,19 +197,19 @@ function Integrations() {
 }
 
 function Network() {
-  const nodes = ['OpenAI', 'Supabase', 'Optra', 'Notion', 'Gmail', 'Calendar', 'Xero', 'Meta', 'Spotify', 'Displays'];
+  const nodes = ['OpenAI', 'Supabase', 'Optra', 'Notion', 'Gmail', 'Calendar', 'Xero', 'Meta', 'Spotify', 'Tools'];
   return (
     <section className="network page-fade">
       <div className="scanline" />
       <div className="network-panel left">
         <p className="eyebrow">Live topology</p>
         <h3>System graph</h3>
-        <p>Visual map of services, tools and skills that will connect into NoA.</p>
+        <p>Local Tool Engine now connects to the OpenAI Brain Layer. Live integrations come next.</p>
       </div>
       <div className="network-panel right">
         <p className="eyebrow">Engine state</p>
-        <h3>Prototype</h3>
-        <p>Animated graph now. Live service state next.</p>
+        <h3>{toolRegistry.length} tools active</h3>
+        <p>{toolRegistry.map((tool) => tool.label).join(', ')}</p>
       </div>
       <div className="network-core"><span>NoA</span><small>Core</small></div>
       {nodes.map((node, index) => <div key={node} className={`network-node n${index + 1}`}>{node}</div>)}
@@ -192,9 +218,47 @@ function Network() {
   );
 }
 
-function Settings({ checkForUpdates, updateStatus }: { checkForUpdates: () => void; updateStatus: string }) {
+
+function Settings({ checkForUpdates, updateStatus, memoryCount, resetMemory }: { checkForUpdates: () => void; updateStatus: string; memoryCount: number; resetMemory: () => void }) {
+  const [openAISettings, setOpenAISettings] = useState<OpenAISettings>(getOpenAISettings());
+  const [aiStatus, setAiStatus] = useState('Not tested');
+
+  const saveAI = () => {
+    saveOpenAISettings(openAISettings);
+    setAiStatus(openAISettings.enabled && openAISettings.apiKey ? 'Saved. OpenAI brain layer enabled.' : 'Saved. OpenAI brain layer disabled.');
+  };
+
+  const testAI = async () => {
+    saveOpenAISettings(openAISettings);
+    setAiStatus('Testing OpenAI connection...');
+    const result = await testOpenAIConnection();
+    setAiStatus(result.ok ? result.text : result.message);
+  };
+
   return (
     <section className="settings page-fade">
+      <article className="glass-card wide">
+        <Sparkles size={24} />
+        <h3>OpenAI Brain Layer</h3>
+        <p>Enable OpenAI to let Noah reason over local tool results. Your key is stored locally on this computer during alpha development.</p>
+        <label className="settings-field">
+          <span>Enable OpenAI</span>
+          <input type="checkbox" checked={openAISettings.enabled} onChange={(e) => setOpenAISettings({ ...openAISettings, enabled: e.target.checked })} />
+        </label>
+        <label className="settings-field">
+          <span>Model</span>
+          <input value={openAISettings.model} onChange={(e) => setOpenAISettings({ ...openAISettings, model: e.target.value })} placeholder="gpt-5.5" />
+        </label>
+        <label className="settings-field">
+          <span>API key</span>
+          <input type="password" value={openAISettings.apiKey || ''} onChange={(e) => setOpenAISettings({ ...openAISettings, apiKey: e.target.value })} placeholder="sk-..." />
+        </label>
+        <div className="settings-actions">
+          <button className="primary" onClick={saveAI}>Save OpenAI settings</button>
+          <button className="primary" onClick={testAI}>Test connection</button>
+        </div>
+        <span>{aiStatus}</span>
+      </article>
       <article className="glass-card wide">
         <DownloadCloud size={24} />
         <h3>Auto updates</h3>
@@ -204,8 +268,9 @@ function Settings({ checkForUpdates, updateStatus }: { checkForUpdates: () => vo
       </article>
       <article className="glass-card wide">
         <TerminalSquare size={24} />
-        <h3>Next developer phase</h3>
-        <p>Create the OpenAI service, secure API key storage, tool registry and first mock action: getTodaysBriefing.</p>
+        <h3>Tool Engine</h3>
+        <p>Mode: {noaSettings.mode}. Local memory entries: {memoryCount}. Available tools: {toolRegistry.length}.</p>
+        <button className="primary" onClick={resetMemory}>Clear local memory</button>
       </article>
     </section>
   );

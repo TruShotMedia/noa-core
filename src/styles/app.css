@@ -85,3 +85,37 @@ h1 { font-size: 32px; letter-spacing: -.04em; margin: 0; }
 @keyframes scan { from { transform: translateY(-40%); } to { transform: translateY(340%); } }
 .page-fade { animation: fade .24s ease both; }
 .spin { animation: spin 1s linear infinite; }
+
+.settings-field {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  color: rgba(244, 247, 251, 0.72);
+  font-size: 13px;
+}
+
+.settings-field input[type="text"],
+.settings-field input[type="password"],
+.settings-field input:not([type]) {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(7, 10, 18, 0.74);
+  color: #f8fbff;
+  padding: 13px 14px;
+  outline: none;
+}
+
+.settings-field input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: #82f7ff;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}

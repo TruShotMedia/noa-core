@@ -4,14 +4,30 @@ const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 const isDev = !app.isPackaged;
-const DEFAULT_MODEL = 'gpt-4.1-mini';
-
 let mainWindow;
+
+const defaultStore = {
+  openaiApiKey: '',
+  openaiModel: 'gpt-4.1-mini',
+  notionApiKey: '',
+  notionTasksDatabaseId: '',
+  notionJobsDatabaseId: '',
+  memories: [],
+  webSearchProvider: 'duckduckgo-lite'
+};
+
 let diagnostics = {
   provider: 'Local fallback',
   brainOnline: false,
   apiKeySaved: false,
-  model: DEFAULT_MODEL,
+  model: 'gpt-4.1-mini',
+  notionConnected: false,
+  notionKeySaved: false,
+  notionTasksDatabaseSaved: false,
+  notionJobsDatabaseSaved: false,
+  lastNotionStatus: 'Not tested',
+  lastNotionError: null,
+  lastNotionRequestAt: null,
   lastIntent: 'none',
   lastConfidence: 0,
   lastApiRequestAt: null,
@@ -19,181 +35,115 @@ let diagnostics = {
   lastApiLatencyMs: null,
   lastApiError: null,
   lastResponseSource: 'none',
-  toolsRegistered: 8,
+  toolsRegistered: 11,
   memoryEntries: 0,
   lastToolName: 'none',
   lastToolStatus: 'idle',
   lastToolLatencyMs: null,
-  lastToolError: null,
-  settingsPath: null,
-  settingsWritable: false,
-  devUrl: null,
-  keyMasked: 'Not saved'
+  lastToolError: null
 };
 
-function defaultStore() {
-  return {
-    openaiApiKey: '',
-    openaiModel: DEFAULT_MODEL,
-    memories: [],
-    webSearchProvider: 'duckduckgo-lite',
-    lastSettingsSaveAt: null
-  };
-}
-
-function getStorePath() {
-  return path.join(app.getPath('userData'), 'noa-settings.json');
-}
-
+function getStorePath() { return path.join(app.getPath('userData'), 'noa-settings.json'); }
 function readStore() {
   try {
     const file = getStorePath();
-    if (!fs.existsSync(file)) return defaultStore();
-    return { ...defaultStore(), ...JSON.parse(fs.readFileSync(file, 'utf8')) };
-  } catch (_error) {
-    return defaultStore();
-  }
+    if (!fs.existsSync(file)) return { ...defaultStore };
+    return { ...defaultStore, ...JSON.parse(fs.readFileSync(file, 'utf8')) };
+  } catch (_error) { return { ...defaultStore }; }
 }
-
 function writeStore(next) {
   const current = readStore();
-  const merged = { ...current, ...next, lastSettingsSaveAt: new Date().toISOString() };
-
+  const merged = { ...current, ...next };
   fs.mkdirSync(path.dirname(getStorePath()), { recursive: true });
   fs.writeFileSync(getStorePath(), JSON.stringify(merged, null, 2), 'utf8');
   updateDiagnosticsFromStore(merged);
   return safeSettings(merged);
 }
-
-function maskKey(key) {
-  if (!key) return 'Not saved';
-  const start = key.slice(0, 7);
-  const end = key.slice(-4);
-  return `${start}${'•'.repeat(12)}${end}`;
-}
-
 function safeSettings(settings = readStore()) {
   return {
-    openaiModel: settings.openaiModel || DEFAULT_MODEL,
+    openaiModel: settings.openaiModel || defaultStore.openaiModel,
     hasOpenAIKey: Boolean(settings.openaiApiKey),
-    openaiKeyLabel: maskKey(settings.openaiApiKey),
+    hasNotionKey: Boolean(settings.notionApiKey),
+    notionTasksDatabaseSaved: Boolean(settings.notionTasksDatabaseId),
+    notionJobsDatabaseSaved: Boolean(settings.notionJobsDatabaseId),
+    notionTasksDatabaseId: settings.notionTasksDatabaseId || '',
+    notionJobsDatabaseId: settings.notionJobsDatabaseId || '',
     memoryCount: Array.isArray(settings.memories) ? settings.memories.length : 0,
-    webSearchProvider: settings.webSearchProvider || 'duckduckgo-lite',
-    lastSettingsSaveAt: settings.lastSettingsSaveAt || null
+    webSearchProvider: settings.webSearchProvider || 'duckduckgo-lite'
   };
 }
-
 function updateDiagnosticsFromStore(settings = readStore()) {
   diagnostics.apiKeySaved = Boolean(settings.openaiApiKey);
-  diagnostics.model = settings.openaiModel || DEFAULT_MODEL;
+  diagnostics.model = settings.openaiModel || defaultStore.openaiModel;
+  diagnostics.notionKeySaved = Boolean(settings.notionApiKey);
+  diagnostics.notionTasksDatabaseSaved = Boolean(settings.notionTasksDatabaseId);
+  diagnostics.notionJobsDatabaseSaved = Boolean(settings.notionJobsDatabaseId);
   diagnostics.memoryEntries = Array.isArray(settings.memories) ? settings.memories.length : 0;
-  diagnostics.settingsPath = getStorePath();
-  diagnostics.keyMasked = maskKey(settings.openaiApiKey);
-  diagnostics.devUrl = process.env.NOA_DEV_URL || 'http://127.0.0.1:5173';
-
-  try {
-    fs.mkdirSync(path.dirname(getStorePath()), { recursive: true });
-    fs.accessSync(path.dirname(getStorePath()), fs.constants.W_OK);
-    diagnostics.settingsWritable = true;
-  } catch (_error) {
-    diagnostics.settingsWritable = false;
-  }
 }
-
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1360,
-    height: 860,
-    minWidth: 1080,
-    minHeight: 720,
-    backgroundColor: '#070910',
-    title: 'NoA',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false
-    }
+    width: 1360, height: 860, minWidth: 1080, minHeight: 720,
+    backgroundColor: '#070910', title: 'NoA',
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false }
   });
-
-  if (isDev) {
-    mainWindow.loadURL(process.env.NOA_DEV_URL || 'http://127.0.0.1:5173');
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
-  }
+  if (isDev) mainWindow.loadURL('http://127.0.0.1:5173');
+  else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
-
-app.whenReady().then(() => {
-  updateDiagnosticsFromStore();
-  createWindow();
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.whenReady().then(() => { updateDiagnosticsFromStore(); createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.handle('noa:get-settings', async () => safeSettings());
-
 ipcMain.handle('noa:save-settings', async (_event, settings) => {
   const current = readStore();
   const next = {
     ...current,
-    openaiModel: settings.openaiModel || current.openaiModel || DEFAULT_MODEL,
+    openaiModel: settings.openaiModel || current.openaiModel || defaultStore.openaiModel,
+    notionTasksDatabaseId: typeof settings.notionTasksDatabaseId === 'string' ? settings.notionTasksDatabaseId.trim() : current.notionTasksDatabaseId,
+    notionJobsDatabaseId: typeof settings.notionJobsDatabaseId === 'string' ? settings.notionJobsDatabaseId.trim() : current.notionJobsDatabaseId,
     webSearchProvider: settings.webSearchProvider || current.webSearchProvider || 'duckduckgo-lite'
   };
-
-  if (typeof settings.openaiApiKey === 'string' && settings.openaiApiKey.trim()) {
-    next.openaiApiKey = settings.openaiApiKey.trim();
-  }
-
+  if (typeof settings.openaiApiKey === 'string' && settings.openaiApiKey.trim()) next.openaiApiKey = settings.openaiApiKey.trim();
+  if (typeof settings.notionApiKey === 'string' && settings.notionApiKey.trim()) next.notionApiKey = settings.notionApiKey.trim();
   return writeStore(next);
 });
-
-ipcMain.handle('noa:get-diagnostics', async () => {
-  updateDiagnosticsFromStore();
-  return diagnostics;
-});
+ipcMain.handle('noa:get-diagnostics', async () => { updateDiagnosticsFromStore(); return diagnostics; });
 
 ipcMain.handle('noa:test-openai', async () => {
   const settings = readStore();
   const started = Date.now();
-  diagnostics.lastApiRequestAt = new Date().toISOString();
-  diagnostics.lastApiStatus = 'Testing';
-  diagnostics.lastApiError = null;
-
+  diagnostics.lastApiRequestAt = new Date().toISOString(); diagnostics.lastApiStatus = 'Testing'; diagnostics.lastApiError = null;
   if (!settings.openaiApiKey) {
-    diagnostics.provider = 'Local fallback';
-    diagnostics.brainOnline = false;
-    diagnostics.lastApiStatus = 'Missing API key';
-    diagnostics.lastApiLatencyMs = Date.now() - started;
-    diagnostics.lastApiError = 'No OpenAI API key saved in NoA settings.';
+    diagnostics.provider = 'Local fallback'; diagnostics.brainOnline = false; diagnostics.lastApiStatus = 'Missing API key'; diagnostics.lastApiLatencyMs = Date.now() - started; diagnostics.lastApiError = 'No OpenAI API key saved.';
     return { ok: false, ...diagnostics };
   }
-
   try {
-    const text = await callOpenAI({
-      apiKey: settings.openaiApiKey,
-      model: settings.openaiModel || DEFAULT_MODEL,
-      input: 'Reply with exactly: NoA OpenAI diagnostics online.'
-    });
-
-    diagnostics.provider = 'OpenAI';
-    diagnostics.brainOnline = true;
-    diagnostics.lastApiStatus = 'Success';
-    diagnostics.lastApiLatencyMs = Date.now() - started;
-    diagnostics.lastApiError = null;
-    diagnostics.lastResponseSource = 'openai_test';
-
+    const text = await callOpenAI({ apiKey: settings.openaiApiKey, model: settings.openaiModel || defaultStore.openaiModel, input: 'Reply with exactly: NoA OpenAI diagnostics online.' });
+    diagnostics.provider = 'OpenAI'; diagnostics.brainOnline = true; diagnostics.lastApiStatus = 'Success'; diagnostics.lastApiLatencyMs = Date.now() - started; diagnostics.lastApiError = null; diagnostics.lastResponseSource = 'openai_test';
     return { ok: true, text, ...diagnostics };
   } catch (error) {
-    diagnostics.provider = 'Local fallback';
-    diagnostics.brainOnline = false;
-    diagnostics.lastApiStatus = 'Failed';
-    diagnostics.lastApiLatencyMs = Date.now() - started;
-    diagnostics.lastApiError = error.message || String(error);
+    diagnostics.provider = 'Local fallback'; diagnostics.brainOnline = false; diagnostics.lastApiStatus = 'Failed'; diagnostics.lastApiLatencyMs = Date.now() - started; diagnostics.lastApiError = error.message || String(error);
+    return { ok: false, ...diagnostics };
+  }
+});
+
+ipcMain.handle('noa:test-notion', async () => {
+  const settings = readStore();
+  diagnostics.lastNotionRequestAt = new Date().toISOString(); diagnostics.lastNotionStatus = 'Testing'; diagnostics.lastNotionError = null;
+  if (!settings.notionApiKey) { diagnostics.notionConnected = false; diagnostics.lastNotionStatus = 'Missing API key'; diagnostics.lastNotionError = 'No Notion integration token saved.'; return { ok: false, ...diagnostics }; }
+  try {
+    const targets = [];
+    if (settings.notionTasksDatabaseId) targets.push({ kind: 'tasks', id: settings.notionTasksDatabaseId });
+    if (settings.notionJobsDatabaseId) targets.push({ kind: 'jobs', id: settings.notionJobsDatabaseId });
+    if (!targets.length) throw new Error('Add at least one Notion database ID for tasks or jobs.');
+    const results = [];
+    for (const target of targets) {
+      const pages = await queryNotionDatabase(settings, target.id, { page_size: 3 });
+      results.push(`${target.kind}: ${pages.length} pages reachable`);
+    }
+    diagnostics.notionConnected = true; diagnostics.lastNotionStatus = 'Success'; diagnostics.lastNotionError = null;
+    return { ok: true, message: results.join(' | '), ...diagnostics };
+  } catch (error) {
+    diagnostics.notionConnected = false; diagnostics.lastNotionStatus = 'Failed'; diagnostics.lastNotionError = error.message || String(error);
     return { ok: false, ...diagnostics };
   }
 });
@@ -203,100 +153,50 @@ ipcMain.handle('noa:chat', async (_event, payload) => {
   const history = Array.isArray(payload?.history) ? payload.history.slice(-8) : [];
   const settings = readStore();
   const route = routeIntent(message);
-  diagnostics.lastIntent = route.intent;
-  diagnostics.lastConfidence = route.confidence;
+  diagnostics.lastIntent = route.intent; diagnostics.lastConfidence = route.confidence;
 
   if (route.intent === 'remember') {
     const memory = message.replace(/^noah,?\s*remember\s*(that)?/i, '').trim();
     const memories = Array.isArray(settings.memories) ? settings.memories : [];
-    memories.push({ text: memory || message, createdAt: new Date().toISOString() });
-    writeStore({ memories });
-    return {
-      ok: true,
-      source: 'local_tool',
-      intent: route.intent,
-      confidence: route.confidence,
-      text: `Absolutely - I’ll remember that. ${memory ? `I’ve saved: “${memory}”.` : 'I’ve saved that note into my local memory.'}`
-    };
+    memories.push({ text: memory || message, createdAt: new Date().toISOString() }); writeStore({ memories });
+    return { ok: true, source: 'local_tool', intent: route.intent, confidence: route.confidence, text: `Got it - I’ll remember that. ${memory ? `I’ve saved: “${memory}”.` : 'I’ve saved that note locally.'}` };
   }
 
   const toolResult = await executeToolForIntent(route.intent, message, settings);
   const toolContext = buildToolContext(route.intent, settings, diagnostics, toolResult);
 
   if (!settings.openaiApiKey) {
-    diagnostics.provider = 'Local fallback';
-    diagnostics.brainOnline = false;
-    diagnostics.lastResponseSource = toolResult ? 'local_tool' : 'local_fallback';
-    return {
-      ok: true,
-      source: toolResult ? 'local_tool' : 'local_fallback',
-      intent: route.intent,
-      confidence: route.confidence,
-      text: localFallbackResponse(route.intent, toolContext)
-    };
+    diagnostics.provider = 'Local fallback'; diagnostics.brainOnline = false; diagnostics.lastResponseSource = toolResult ? 'local_tool' : 'local_fallback';
+    return { ok: true, source: diagnostics.lastResponseSource, intent: route.intent, confidence: route.confidence, text: localFallbackResponse(route.intent, toolContext) };
   }
 
-  const started = Date.now();
-  diagnostics.lastApiRequestAt = new Date().toISOString();
-  diagnostics.lastApiStatus = 'Sending';
-  diagnostics.lastApiError = null;
-
+  const started = Date.now(); diagnostics.lastApiRequestAt = new Date().toISOString(); diagnostics.lastApiStatus = 'Sending'; diagnostics.lastApiError = null;
   try {
     const prompt = buildNoahPrompt({ message, history, toolContext });
-    const text = await callOpenAI({
-      apiKey: settings.openaiApiKey,
-      model: settings.openaiModel || DEFAULT_MODEL,
-      input: prompt
-    });
-
-    diagnostics.provider = 'OpenAI';
-    diagnostics.brainOnline = true;
-    diagnostics.lastApiStatus = 'Success';
-    diagnostics.lastApiLatencyMs = Date.now() - started;
-    diagnostics.lastApiError = null;
-    diagnostics.lastResponseSource = toolResult ? `openai_with_${toolResult.tool}` : 'openai';
-
-    return {
-      ok: true,
-      source: diagnostics.lastResponseSource,
-      intent: route.intent,
-      confidence: route.confidence,
-      text
-    };
+    const text = await callOpenAI({ apiKey: settings.openaiApiKey, model: settings.openaiModel || defaultStore.openaiModel, input: prompt });
+    diagnostics.provider = 'OpenAI'; diagnostics.brainOnline = true; diagnostics.lastApiStatus = 'Success'; diagnostics.lastApiLatencyMs = Date.now() - started; diagnostics.lastApiError = null; diagnostics.lastResponseSource = toolResult ? `openai_with_${toolResult.tool}` : 'openai';
+    return { ok: true, source: diagnostics.lastResponseSource, intent: route.intent, confidence: route.confidence, text };
   } catch (error) {
-    diagnostics.provider = 'Local fallback';
-    diagnostics.brainOnline = false;
-    diagnostics.lastApiStatus = 'Failed';
-    diagnostics.lastApiLatencyMs = Date.now() - started;
-    diagnostics.lastApiError = error.message || String(error);
-    diagnostics.lastResponseSource = toolResult ? 'local_tool_after_openai_error' : 'local_fallback_after_error';
-
-    return {
-      ok: false,
-      source: diagnostics.lastResponseSource,
-      intent: route.intent,
-      confidence: route.confidence,
-      text: `${localFallbackResponse(route.intent, toolContext)}\n\nI tried to reach my OpenAI brain as well, but the request failed. The Diagnostics page will show the exact error.`
-    };
+    diagnostics.provider = 'Local fallback'; diagnostics.brainOnline = false; diagnostics.lastApiStatus = 'Failed'; diagnostics.lastApiLatencyMs = Date.now() - started; diagnostics.lastApiError = error.message || String(error); diagnostics.lastResponseSource = toolResult ? 'local_tool_after_openai_error' : 'local_fallback_after_error';
+    return { ok: false, source: diagnostics.lastResponseSource, intent: route.intent, confidence: route.confidence, text: `${localFallbackResponse(route.intent, toolContext)}\n\nI also tried OpenAI, but that request failed. Check Diagnostics for the exact error.` };
   }
 });
 
 ipcMain.handle('noa:check-for-updates', async () => {
   if (isDev) return { status: 'Dev mode', message: 'Auto updates only run in packaged builds.' };
-  try {
-    const result = await autoUpdater.checkForUpdatesAndNotify();
-    return { status: 'Checking', message: result ? 'Update check started.' : 'No update response returned.' };
-  } catch (error) {
-    return { status: 'Failed', message: error.message || String(error) };
-  }
+  try { const result = await autoUpdater.checkForUpdatesAndNotify(); return { status: 'Checking', message: result ? 'Update check started.' : 'No update response returned.' }; }
+  catch (error) { return { status: 'Failed', message: error.message || String(error) }; }
 });
 
 function routeIntent(message) {
   const m = message.toLowerCase();
-  if (m.includes('what do you remember') || m.includes('memory')) return { intent: 'memory_lookup', confidence: 88 };
   if (m.includes('remember')) return { intent: 'remember', confidence: 92 };
   if (m.includes('weather') || m.includes('forecast') || m.includes('temperature') || m.includes('rain')) return { intent: 'weather_lookup', confidence: 91 };
+  if (m.includes('notion') && (m.includes('test') || m.includes('connect'))) return { intent: 'notion_status', confidence: 88 };
+  if (m.includes('task') || m.includes('due today') || m.includes('to do') || m.includes('todo') || m.includes('overdue')) return { intent: 'notion_tasks', confidence: 90 };
+  if (m.includes('job') || m.includes('shoot') || m.includes('booking') || m.includes('pipeline')) return { intent: 'notion_jobs', confidence: 88 };
   if (m.includes('search') || m.includes('look up') || m.includes('latest') || m.includes('google') || m.includes('web')) return { intent: 'web_search', confidence: 82 };
+  if (m.includes('what do you remember') || m.includes('memory')) return { intent: 'memory_lookup', confidence: 86 };
   if (m.includes('status') || m.includes('diagnostic') || m.includes('online')) return { intent: 'system_status', confidence: 84 };
   if (m.includes('tool') || m.includes('what can you use')) return { intent: 'tool_list', confidence: 88 };
   if (m.includes('today') || m.includes('attention') || m.includes('priority') || m.includes('briefing')) return { intent: 'todays_briefing', confidence: 82 };
@@ -304,25 +204,23 @@ function routeIntent(message) {
 }
 
 async function executeToolForIntent(intent, message, settings) {
-  if (!['weather_lookup', 'web_search'].includes(intent)) return null;
-  const started = Date.now();
-  diagnostics.lastToolName = intent === 'weather_lookup' ? 'getWeather' : 'webSearchLite';
-  diagnostics.lastToolStatus = 'running';
-  diagnostics.lastToolLatencyMs = null;
-  diagnostics.lastToolError = null;
-
+  const toolMap = {
+    weather_lookup: 'getWeather', web_search: 'webSearchLite', notion_tasks: 'getNotionTasks', notion_jobs: 'getNotionJobs', todays_briefing: 'getCombinedBriefing', notion_status: 'testNotion'
+  };
+  if (!toolMap[intent]) return null;
+  const started = Date.now(); diagnostics.lastToolName = toolMap[intent]; diagnostics.lastToolStatus = 'running'; diagnostics.lastToolLatencyMs = null; diagnostics.lastToolError = null;
   try {
-    const result = intent === 'weather_lookup'
-      ? await getWeather(message)
-      : await webSearchLite(message, settings);
-    diagnostics.lastToolStatus = result.ok ? 'success' : 'limited';
-    diagnostics.lastToolLatencyMs = Date.now() - started;
-    diagnostics.lastToolError = result.ok ? null : result.error || result.note || 'Tool returned limited data.';
+    let result;
+    if (intent === 'weather_lookup') result = await getWeather(message);
+    if (intent === 'web_search') result = await webSearchLite(message);
+    if (intent === 'notion_tasks') result = await getNotionTasks(settings, message);
+    if (intent === 'notion_jobs') result = await getNotionJobs(settings, message);
+    if (intent === 'todays_briefing') result = await getCombinedBriefing(settings, message);
+    if (intent === 'notion_status') result = await getNotionStatus(settings);
+    diagnostics.lastToolStatus = result.ok ? 'success' : 'limited'; diagnostics.lastToolLatencyMs = Date.now() - started; diagnostics.lastToolError = result.ok ? null : result.error || result.note || 'Tool returned limited data.';
     return result;
   } catch (error) {
-    diagnostics.lastToolStatus = 'failed';
-    diagnostics.lastToolLatencyMs = Date.now() - started;
-    diagnostics.lastToolError = error.message || String(error);
+    diagnostics.lastToolStatus = 'failed'; diagnostics.lastToolLatencyMs = Date.now() - started; diagnostics.lastToolError = error.message || String(error);
     return { ok: false, tool: diagnostics.lastToolName, error: diagnostics.lastToolError };
   }
 }
@@ -337,226 +235,159 @@ function extractLocation(message) {
     sydney: { name: 'Sydney', latitude: -33.8688, longitude: 151.2093, timezone: 'Australia/Sydney' },
     melbourne: { name: 'Melbourne', latitude: -37.8136, longitude: 144.9631, timezone: 'Australia/Melbourne' }
   };
-
-  for (const [key, value] of Object.entries(known)) {
-    if (m.includes(key)) return value;
-  }
+  for (const [key, value] of Object.entries(known)) if (m.includes(key)) return value;
   return known.brisbane;
 }
-
 async function getWeather(message) {
   const location = extractLocation(message);
-  const params = new URLSearchParams({
-    latitude: String(location.latitude),
-    longitude: String(location.longitude),
-    current: 'temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m',
-    daily: 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code',
-    timezone: location.timezone,
-    forecast_days: '1'
-  });
-  const url = `https://api.open-meteo.com/v1/forecast?${params.toString()}`;
-  const response = await fetch(url);
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data?.reason || response.statusText || 'Weather request failed.');
-
-  const current = data.current || {};
-  const daily = data.daily || {};
-  return {
-    ok: true,
-    tool: 'getWeather',
-    location: location.name,
-    provider: 'Open-Meteo',
-    summary: {
-      temperature: current.temperature_2m,
-      apparentTemperature: current.apparent_temperature,
-      windSpeed: current.wind_speed_10m,
-      precipitation: current.precipitation,
-      weatherCode: current.weather_code,
-      high: daily.temperature_2m_max?.[0],
-      low: daily.temperature_2m_min?.[0],
-      rainChance: daily.precipitation_probability_max?.[0],
-      time: current.time
-    }
-  };
+  const params = new URLSearchParams({ latitude: String(location.latitude), longitude: String(location.longitude), current: 'temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m', daily: 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code', timezone: location.timezone, forecast_days: '1' });
+  const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params.toString()}`); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data?.reason || response.statusText || 'Weather request failed.');
+  const current = data.current || {}, daily = data.daily || {};
+  return { ok: true, tool: 'getWeather', location: location.name, provider: 'Open-Meteo', summary: { temperature: current.temperature_2m, apparentTemperature: current.apparent_temperature, windSpeed: current.wind_speed_10m, precipitation: current.precipitation, weatherCode: current.weather_code, high: daily.temperature_2m_max?.[0], low: daily.temperature_2m_min?.[0], rainChance: daily.precipitation_probability_max?.[0], time: current.time } };
+}
+async function webSearchLite(message) {
+  const query = message.replace(/^(noah,?\s*)?/i, '').replace(/\b(search|look up|web|google|latest)\b/gi, '').replace(/\s+/g, ' ').trim() || message;
+  const response = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(response.statusText || 'Web search request failed.');
+  const related = Array.isArray(data.RelatedTopics) ? data.RelatedTopics.flatMap((item) => item.Topics || [item]).filter((item) => item.Text).slice(0, 5) : [];
+  if (!data.AbstractText && !related.length) return { ok: false, tool: 'webSearchLite', query, note: 'DuckDuckGo Instant Answer returned no usable summary. A stronger search provider can be added next.' };
+  return { ok: true, tool: 'webSearchLite', provider: 'DuckDuckGo Instant Answer', query, abstract: data.AbstractText || '', heading: data.Heading || '', results: related.map((item) => ({ text: item.Text, url: item.FirstURL || '' })) };
 }
 
-async function webSearchLite(message) {
-  const query = message
-    .replace(/^(noah,?\s*)?/i, '')
-    .replace(/\b(search|look up|web|google|latest)\b/gi, '')
-    .replace(/\s+/g, ' ')
-    .trim() || message;
-  const url = `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-  const response = await fetch(url);
+function normalizeDatabaseId(id) { return String(id || '').trim().replace(/-/g, ''); }
+async function notionFetch(settings, endpoint, body) {
+  if (!settings.notionApiKey) throw new Error('No Notion API key saved.');
+  const response = await fetch(`https://api.notion.com/v1/${endpoint}`, { method: 'POST', headers: { Authorization: `Bearer ${settings.notionApiKey}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' }, body: JSON.stringify(body || {}) });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(response.statusText || 'Web search request failed.');
-
-  const related = Array.isArray(data.RelatedTopics)
-    ? data.RelatedTopics.flatMap((item) => item.Topics || [item]).filter((item) => item.Text).slice(0, 5)
-    : [];
-
-  if (!data.AbstractText && !related.length) {
-    return {
-      ok: false,
-      tool: 'webSearchLite',
-      query,
-      note: 'DuckDuckGo Instant Answer returned no usable summary. A stronger search provider such as Tavily, SerpAPI, Brave Search or Bing Search can be added next.'
-    };
-  }
-
+  if (!response.ok) throw new Error(data?.message || response.statusText || 'Notion request failed.');
+  return data;
+}
+async function queryNotionDatabase(settings, databaseId, body = {}) {
+  const cleanId = normalizeDatabaseId(databaseId);
+  if (!cleanId) throw new Error('Missing Notion database ID.');
+  const data = await notionFetch(settings, `databases/${cleanId}/query`, { page_size: 20, ...body });
+  return Array.isArray(data.results) ? data.results : [];
+}
+function plainText(items) { return Array.isArray(items) ? items.map((x) => x.plain_text || '').join('') : ''; }
+function propValue(prop) {
+  if (!prop) return '';
+  if (prop.type === 'title') return plainText(prop.title);
+  if (prop.type === 'rich_text') return plainText(prop.rich_text);
+  if (prop.type === 'date') return prop.date?.start || '';
+  if (prop.type === 'status') return prop.status?.name || '';
+  if (prop.type === 'select') return prop.select?.name || '';
+  if (prop.type === 'multi_select') return (prop.multi_select || []).map((x) => x.name).join(', ');
+  if (prop.type === 'checkbox') return prop.checkbox ? 'Yes' : 'No';
+  if (prop.type === 'people') return (prop.people || []).map((x) => x.name || x.id).join(', ');
+  if (prop.type === 'number') return String(prop.number ?? '');
+  if (prop.type === 'url') return prop.url || '';
+  if (prop.type === 'email') return prop.email || '';
+  if (prop.type === 'phone_number') return prop.phone_number || '';
+  return '';
+}
+function pageToItem(page) {
+  const props = page.properties || {};
+  const entries = Object.entries(props);
+  const titleEntry = entries.find(([, p]) => p.type === 'title');
+  const dateEntry = entries.find(([name, p]) => p.type === 'date' && /due|date|deadline|schedule|when/i.test(name)) || entries.find(([, p]) => p.type === 'date');
+  const statusEntry = entries.find(([name, p]) => ['status', 'select', 'checkbox'].includes(p.type) && /status|stage|done|complete|progress/i.test(name));
+  const clientEntry = entries.find(([name]) => /client|customer|brand/i.test(name));
   return {
-    ok: true,
-    tool: 'webSearchLite',
-    provider: 'DuckDuckGo Instant Answer',
-    query,
-    abstract: data.AbstractText || '',
-    heading: data.Heading || '',
-    results: related.map((item) => ({ text: item.Text, url: item.FirstURL || '' }))
+    id: page.id,
+    title: propValue(titleEntry?.[1]) || 'Untitled',
+    date: propValue(dateEntry?.[1]),
+    status: propValue(statusEntry?.[1]) || '',
+    client: propValue(clientEntry?.[1]) || '',
+    url: page.url,
+    updatedAt: page.last_edited_time
   };
+}
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function isDueTodayOrOverdue(dateValue) {
+  if (!dateValue) return false;
+  const d = String(dateValue).slice(0, 10);
+  return d <= todayISO();
+}
+function isIncomplete(item) { return !/done|complete|completed|archived|cancelled|yes/i.test(item.status || ''); }
+async function getNotionTasks(settings, message) {
+  if (!settings.notionTasksDatabaseId) return { ok: false, tool: 'getNotionTasks', note: 'No Notion tasks database ID saved yet.' };
+  const pages = await queryNotionDatabase(settings, settings.notionTasksDatabaseId);
+  const items = pages.map(pageToItem).filter(isIncomplete);
+  const m = String(message).toLowerCase();
+  const filtered = (m.includes('today') || m.includes('overdue') || m.includes('attention') || m.includes('due')) ? items.filter((i) => isDueTodayOrOverdue(i.date)) : items;
+  diagnostics.notionConnected = true; diagnostics.lastNotionStatus = 'Success'; diagnostics.lastNotionError = null;
+  return { ok: true, tool: 'getNotionTasks', provider: 'Notion', scope: filtered.length === items.length ? 'all_open' : 'due_today_or_overdue', count: filtered.length, items: filtered.slice(0, 12) };
+}
+async function getNotionJobs(settings, _message) {
+  if (!settings.notionJobsDatabaseId) return { ok: false, tool: 'getNotionJobs', note: 'No Notion jobs database ID saved yet.' };
+  const pages = await queryNotionDatabase(settings, settings.notionJobsDatabaseId);
+  const items = pages.map(pageToItem).filter(isIncomplete).slice(0, 12);
+  diagnostics.notionConnected = true; diagnostics.lastNotionStatus = 'Success'; diagnostics.lastNotionError = null;
+  return { ok: true, tool: 'getNotionJobs', provider: 'Notion', count: items.length, items };
+}
+async function getCombinedBriefing(settings, message) {
+  const results = [];
+  if (settings.notionTasksDatabaseId) results.push(await getNotionTasks(settings, message));
+  if (settings.notionJobsDatabaseId) results.push(await getNotionJobs(settings, message));
+  if (!results.length) return { ok: false, tool: 'getCombinedBriefing', note: 'Notion is not configured yet, so I can only provide the prototype briefing.' };
+  return { ok: true, tool: 'getCombinedBriefing', provider: 'Notion', results };
+}
+async function getNotionStatus(settings) {
+  if (!settings.notionApiKey) return { ok: false, tool: 'testNotion', note: 'No Notion API key saved.' };
+  return await (async () => {
+    const targets = [];
+    if (settings.notionTasksDatabaseId) targets.push(await getNotionTasks(settings, 'all tasks'));
+    if (settings.notionJobsDatabaseId) targets.push(await getNotionJobs(settings, 'jobs'));
+    return { ok: targets.some((x) => x.ok), tool: 'testNotion', results: targets, note: targets.length ? undefined : 'No Notion database IDs saved.' };
+  })();
 }
 
 function buildToolContext(intent, settings, diag, toolResult) {
   const memories = Array.isArray(settings.memories) ? settings.memories.slice(-12) : [];
-  const context = {
+  return {
     intent,
-    diagnostics: {
-      provider: diag.provider,
-      apiKeySaved: Boolean(settings.openaiApiKey),
-      model: settings.openaiModel || DEFAULT_MODEL,
-      toolsRegistered: diag.toolsRegistered,
-      memoryEntries: memories.length,
-      lastToolName: diag.lastToolName,
-      lastToolStatus: diag.lastToolStatus
-    },
-    availableTools: [
-      'getTodaysBriefing',
-      'getSystemStatus',
-      'listTools',
-      'rememberContext',
-      'getWeather',
-      'webSearchLite',
-      'memoryLookup',
-      'diagnosticsStatus'
-    ],
-    todaysBriefing: {
-      activeJobs: 3,
-      outstandingTasks: 7,
-      meetings: 1,
-      priorityFocus: 'Connect real Notion and Optra data so Noah can brief from live systems.'
-    },
+    diagnostics: { provider: diag.provider, apiKeySaved: Boolean(settings.openaiApiKey), model: settings.openaiModel || defaultStore.openaiModel, notionConnected: diag.notionConnected, notionConfigured: Boolean(settings.notionApiKey && (settings.notionTasksDatabaseId || settings.notionJobsDatabaseId)), toolsRegistered: diag.toolsRegistered, memoryEntries: memories.length, lastToolName: diag.lastToolName, lastToolStatus: diag.lastToolStatus },
+    availableTools: ['getTodaysBriefing', 'getSystemStatus', 'listTools', 'rememberContext', 'getWeather', 'webSearchLite', 'memoryLookup', 'diagnosticsStatus', 'getNotionTasks', 'getNotionJobs', 'getCombinedBriefing'],
+    prototypeBriefing: { activeJobs: 3, outstandingTasks: 7, meetings: 1, priorityFocus: 'Connect Notion and Optra data so Noah can brief from live systems.' },
     memories,
     toolResult
   };
-
-  if (intent === 'memory_lookup') context.memoryLookup = memories;
-  return context;
 }
-
 function buildNoahPrompt({ message, history, toolContext }) {
   return [
-    {
-      role: 'system',
-      content: [
-        'You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.',
-        'NoA is the visual system name. Noah is the natural voice/conversation identity.',
-        'Your tone should feel close to ChatGPT: warm, conversational, clear and human.',
-        'Do not talk like a diagnostic terminal.',
-        'Do not mention intent, confidence, routing, tool names or provider internals unless John asks for technical detail.',
-        'Be honest about what is real and what is still prototype data.',
-        'Use toolResult data when provided. If weather data is provided, answer with actual weather values.',
-        'If a tool is limited, explain that simply and offer the next practical improvement.',
-        'Keep replies natural, helpful and concise.'
-      ].join('\n')
-    },
-    {
-      role: 'user',
-      content: [
-        `John said: ${message}`,
-        '',
-        `Recent conversation: ${JSON.stringify(history)}`,
-        '',
-        `NoA context and tool data: ${JSON.stringify(toolContext, null, 2)}`
-      ].join('\n')
-    }
+    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
+    { role: 'user', content: [`Current user message: ${message}`, '', `Recent conversation: ${JSON.stringify(history)}`, '', `NoA tool/context state: ${JSON.stringify(toolContext, null, 2)}`].join('\n') }
   ];
 }
-
 async function callOpenAI({ apiKey, model, input }) {
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model,
-      input,
-      temperature: 0.7
-    })
-  });
-
+  const response = await fetch('https://api.openai.com/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, input, temperature: 0.7 }) });
   const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const detail = data?.error?.message || response.statusText || `HTTP ${response.status}`;
-    throw new Error(detail);
-  }
-
-  if (typeof data.output_text === 'string' && data.output_text.trim()) {
-    return data.output_text.trim();
-  }
-
-  const outputText = data?.output
-    ?.flatMap((item) => item?.content || [])
-    ?.map((content) => content?.text || '')
-    ?.join('\n')
-    ?.trim();
-
+  if (!response.ok) throw new Error(data?.error?.message || response.statusText || `HTTP ${response.status}`);
+  if (typeof data.output_text === 'string' && data.output_text.trim()) return data.output_text.trim();
+  const outputText = data?.output?.flatMap((item) => item?.content || [])?.map((content) => content?.text || '').join('\n').trim();
   return outputText || 'OpenAI returned a response, but NoA could not extract readable text.';
 }
-
 function formatWeather(toolResult) {
-  const w = toolResult?.summary || {};
-  const parts = [];
-  if (w.temperature !== undefined) parts.push(`${w.temperature}°C now`);
-  if (w.apparentTemperature !== undefined) parts.push(`feels like ${w.apparentTemperature}°C`);
-  if (w.high !== undefined && w.low !== undefined) parts.push(`high ${w.high}°C / low ${w.low}°C`);
-  if (w.rainChance !== undefined) parts.push(`${w.rainChance}% chance of rain`);
-  if (w.windSpeed !== undefined) parts.push(`wind ${w.windSpeed} km/h`);
+  const w = toolResult?.summary || {}; const parts = [];
+  if (w.temperature !== undefined) parts.push(`${w.temperature}°C now`); if (w.apparentTemperature !== undefined) parts.push(`feels like ${w.apparentTemperature}°C`); if (w.high !== undefined && w.low !== undefined) parts.push(`high ${w.high}°C / low ${w.low}°C`); if (w.rainChance !== undefined) parts.push(`${w.rainChance}% chance of rain`); if (w.windSpeed !== undefined) parts.push(`wind ${w.windSpeed} km/h`);
   return `For ${toolResult.location}, I’m seeing ${parts.join(', ')}. Source: ${toolResult.provider}.`;
 }
-
+function formatItems(label, items) {
+  if (!items?.length) return `I didn’t find any open ${label}.`;
+  return items.map((item, index) => `${index + 1}. ${item.title}${item.date ? ` - ${item.date}` : ''}${item.status ? ` (${item.status})` : ''}${item.client ? ` - ${item.client}` : ''}`).join('\n');
+}
 function localFallbackResponse(intent, context) {
-  if (intent === 'weather_lookup') {
-    if (context.toolResult?.ok) return formatWeather(context.toolResult);
-    return `I tried to check the weather, but the tool failed: ${context.toolResult?.error || context.toolResult?.note || 'Unknown issue'}.`;
-  }
-
-  if (intent === 'web_search') {
-    if (context.toolResult?.ok) {
-      const resultLines = [context.toolResult.abstract, ...(context.toolResult.results || []).map((r) => `- ${r.text}`)].filter(Boolean);
-      return `I found this using the lightweight web search tool:\n${resultLines.join('\n')}`;
-    }
-    return context.toolResult?.note || 'The lightweight web search tool did not return a useful result. Next step is adding a stronger web search provider.';
-  }
-
-  if (intent === 'system_status') {
-    return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather lookup and lightweight web search are active in Alpha 0.8.';
-  }
-
-  if (intent === 'tool_list') {
-    return `Right now I can use: ${context.availableTools.join(', ')}. Weather is live through Open-Meteo, and web search is currently a lightweight DuckDuckGo Instant Answer tool.`;
-  }
-
-  if (intent === 'memory_lookup') {
-    if (!context.memories?.length) return 'I do not have any saved local memories yet. You can say “Noah, remember that...” and I’ll store it locally.';
-    return `Here’s what I remember locally:\n${context.memories.map((m) => `- ${m.text}`).join('\n')}`;
-  }
-
+  const tr = context.toolResult;
+  if (intent === 'weather_lookup') return tr?.ok ? formatWeather(tr) : `I tried to use the weather tool, but it failed: ${tr?.error || tr?.note || 'Unknown issue'}.`;
+  if (intent === 'web_search') return tr?.ok ? `I found this using lightweight web search:\n${[tr.abstract, ...(tr.results || []).map((r) => `- ${r.text}`)].filter(Boolean).join('\n')}` : (tr?.note || 'The lightweight web search tool did not return a useful result.');
+  if (intent === 'notion_tasks') return tr?.ok ? `Here’s what I found in Notion tasks:\n${formatItems('tasks', tr.items)}` : `I couldn’t pull Notion tasks yet: ${tr?.note || tr?.error || 'unknown issue'}`;
+  if (intent === 'notion_jobs') return tr?.ok ? `Here’s what I found in Notion jobs:\n${formatItems('jobs', tr.items)}` : `I couldn’t pull Notion jobs yet: ${tr?.note || tr?.error || 'unknown issue'}`;
   if (intent === 'todays_briefing') {
-    const brief = context.todaysBriefing;
-    return `Here’s your local prototype briefing: ${brief.activeJobs} active jobs, ${brief.outstandingTasks} outstanding tasks and ${brief.meetings} meeting. Priority focus: ${brief.priorityFocus}`;
+    if (tr?.ok && tr.results) return tr.results.map((r) => r.ok ? `${r.tool}:\n${formatItems(r.tool.includes('Task') ? 'tasks' : 'jobs', r.items)}` : r.note).join('\n\n');
+    const brief = context.prototypeBriefing; return `Here’s your prototype briefing: ${brief.activeJobs} active jobs, ${brief.outstandingTasks} outstanding tasks and ${brief.meetings} meeting. Priority focus: ${brief.priorityFocus}`;
   }
-
+  if (intent === 'notion_status') return tr?.ok ? 'Notion is connected and at least one configured database is reachable.' : `Notion is not ready yet: ${tr?.note || tr?.error || 'check settings.'}`;
+  if (intent === 'system_status') return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather, lightweight web search and Notion integration are available in Alpha 0.9.';
+  if (intent === 'tool_list') return `Right now I can use: ${context.availableTools.join(', ')}.`;
+  if (intent === 'memory_lookup') return context.memories?.length ? `Here’s what I remember locally:\n${context.memories.map((m) => `- ${m.text}`).join('\n')}` : 'I do not have any saved local memories yet.';
   return 'I’m here. OpenAI may be offline or unavailable right now, so I’m answering from NoA’s local fallback layer.';
 }

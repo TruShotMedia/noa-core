@@ -1,17 +1,30 @@
-# NoA Core - Alpha 0.7
+# NoA Core - Alpha 0.9
 
-NoA Alpha 0.7 adds first practical tool integrations: live weather, lightweight web lookup, local memory, diagnostics, and OpenAI-backed natural conversation when an API key is saved.
+NoA is the visual desktop interface for Noah, the spoken Noetic Advisor.
 
-## Install
+## Alpha 0.9 adds
+
+- Notion integration settings
+- Notion connection test
+- Tasks database lookup
+- Jobs database lookup
+- Combined daily briefing from Notion
+- Notion diagnostics
+- Notion network node state
+
+## Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Test prompts
+For local network/tablet viewing:
 
-- Noah, what is the weather in Brisbane today?
-- Noah, search web OpenAI Responses API
-- Noah, what tools can you use?
-- Noah, remember that TruShot needs a retainer workflow
+```bash
+npm run dev:lan
+```
+
+## Notion setup
+
+Create an internal Notion integration, share your task/job databases with that integration, then paste the integration token and database IDs into NoA Settings.

@@ -1,29 +1,63 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
-import { Command, Cpu, Database, DownloadCloud, Loader2, Lock, MessageSquareText, Pin, PlugZap, Save, Search, Send, Shield, Sparkles, TerminalSquare, Trash2, Zap } from 'lucide-react';
-import { dashboardCards, integrations, navItems, priorities } from './data/system';
-import { noaSettings } from './config/settings';
-import { getOpenAISettings, saveOpenAISettings, testOpenAIConnection, type OpenAISettings } from './services/ai/openai';
-import { routeCommand } from './services/commandRouter';
-import { addMemoryEntry, clearMemory, deleteMemory, getAllMemory, getContextProfile, getMemoryStats, saveContextProfile, searchMemory } from './services/memory/memoryStore';
-import type { ContextProfile } from './types/noa';
-import { toolRegistry } from './services/tools/registry';
+import {
+  Activity,
+  ArrowUpRight,
+  Brain,
+  CheckCircle2,
+  Command,
+  Cpu,
+  Database,
+  DownloadCloud,
+  Gauge,
+  KeyRound,
+  Loader2,
+  Lock,
+  MessageSquareText,
+  PlugZap,
+  Send,
+  Shield,
+  Sparkles,
+  TerminalSquare,
+  Wifi,
+  WifiOff,
+  Zap
+} from 'lucide-react';
 import './styles/app.css';
 
-type Screen = 'dashboard' | 'chat' | 'memory' | 'integrations' | 'network' | 'settings';
-type Message = { role: 'noa' | 'john'; text: string };
+type Screen = 'dashboard' | 'chat' | 'integrations' | 'network' | 'diagnostics' | 'settings';
+type Role = 'noa' | 'john';
+type Message = { role: Role; text: string; source?: string; intent?: string; confidence?: number };
+
+const navItems = [
+  { id: 'dashboard', label: 'Dashboard', icon: Gauge },
+  { id: 'chat', label: 'Chat', icon: MessageSquareText },
+  { id: 'integrations', label: 'Integrations', icon: PlugZap },
+  { id: 'network', label: 'Network', icon: Activity },
+  { id: 'diagnostics', label: 'Diagnostics', icon: TerminalSquare },
+  { id: 'settings', label: 'Settings', icon: Shield }
+];
+
+const dashboardCards = [
+  { label: 'Brain', value: 'OpenAI-ready', detail: 'Real API diagnostics now visible', icon: Brain },
+  { label: 'Tools', value: '8', detail: 'Weather, search, memory and diagnostics', icon: Cpu },
+  { label: 'Memory', value: 'Local', detail: 'Context notes saved privately', icon: Database },
+  { label: 'Status', value: 'Alpha 0.7', detail: 'Tool integrations + natural chat', icon: Sparkles }
+];
 
 function App() {
   const [screen, setScreen] = useState<Screen>('dashboard');
   const [command, setCommand] = useState('');
-  const [isRouting, setIsRouting] = useState(false);
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'noa', text: 'Noah online. NoA Alpha 0.5 Memory Engine is active. I can now save notes, search local memory and use your context profile.' }
+    {
+      role: 'noa',
+      text: 'Hey John - Noah is online. I can now use live weather, lightweight web lookup, memory, diagnostics and OpenAI when available.',
+      source: 'local'
+    }
   ]);
-  const [updateStatus, setUpdateStatus] = useState('Ready');
-  const [memoryRefresh, setMemoryRefresh] = useState(0);
-
-  const memoryStats = useMemo(() => getMemoryStats(), [memoryRefresh]);
+  const [sending, setSending] = useState(false);
+  const [settings, setSettings] = useState<NoASettings>({});
+  const [diagnostics, setDiagnostics] = useState<NoADiagnostics | null>(null);
 
   const greeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -32,42 +66,51 @@ function App() {
     return 'Good evening, John.';
   }, []);
 
-  const refreshMemory = () => setMemoryRefresh((value) => value + 1);
+  const refreshDiagnostics = async () => {
+    const [nextSettings, nextDiagnostics] = await Promise.all([
+      window.noa?.getSettings(),
+      window.noa?.getDiagnostics()
+    ]);
+    if (nextSettings) setSettings(nextSettings);
+    if (nextDiagnostics) setDiagnostics(nextDiagnostics);
+  };
+
+  useEffect(() => {
+    refreshDiagnostics();
+    const timer = window.setInterval(refreshDiagnostics, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const submitCommand = async () => {
-    if (!command.trim() || isRouting) return;
+    if (!command.trim() || sending) return;
     const input = command.trim();
     setCommand('');
     setScreen('chat');
-    setIsRouting(true);
+    const history = messages.map((m) => ({ role: m.role, text: m.text }));
     setMessages((current) => [...current, { role: 'john', text: input }]);
+    setSending(true);
 
     try {
-      const routed = await routeCommand(input);
+      const result = await window.noa?.sendChat({ message: input, history });
       setMessages((current) => [
         ...current,
-        { role: 'noa', text: `${routed.response}\n\nIntent: ${routed.intent}${routed.toolUsed ? `\nTool used: ${routed.toolUsed}` : ''}\nConfidence: ${Math.round(routed.confidence * 100)}%` }
+        {
+          role: 'noa',
+          text: result?.text || 'I tried to respond, but NoA did not return a readable message.',
+          source: result?.source,
+          intent: result?.intent,
+          confidence: result?.confidence
+        }
       ]);
-      refreshMemory();
     } catch (error) {
       setMessages((current) => [
         ...current,
-        { role: 'noa', text: `I hit an error while routing that command. ${error instanceof Error ? error.message : 'Unknown error'}` }
+        { role: 'noa', text: `Something failed inside NoA: ${String(error)}`, source: 'error' }
       ]);
     } finally {
-      setIsRouting(false);
+      setSending(false);
+      refreshDiagnostics();
     }
-  };
-
-  const checkForUpdates = async () => {
-    setUpdateStatus('Checking...');
-    const result = await window.noa?.checkForUpdates();
-    setUpdateStatus(result?.message || result?.status || 'Unavailable in dev mode');
-  };
-
-  const resetMemory = () => {
-    clearMemory();
-    refreshMemory();
   };
 
   return (
@@ -85,7 +128,10 @@ function App() {
             );
           })}
         </nav>
-        <div className="rail-status"><span /> Memory</div>
+        <div className={`rail-status ${diagnostics?.brainOnline ? 'online' : 'fallback'}`}>
+          <span />
+          {diagnostics?.brainOnline ? 'OpenAI online' : 'Local fallback'}
+        </div>
       </aside>
 
       <section className="workspace">
@@ -95,41 +141,40 @@ function App() {
             <h1>{screenTitle(screen)}</h1>
           </div>
           <div className="top-actions">
-            <div className="status-pill"><Shield size={16} /> Alpha 0.5</div>
-            <div className="status-pill muted"><Lock size={16} /> Memory engine</div>
+            <div className={`status-pill ${diagnostics?.brainOnline ? 'success' : 'warn'}`}>
+              {diagnostics?.brainOnline ? <Wifi size={16} /> : <WifiOff size={16} />}
+              {diagnostics?.provider || 'Checking'}
+            </div>
+            <div className="status-pill muted"><Lock size={16} /> Alpha 0.7</div>
           </div>
         </header>
 
-        {screen === 'dashboard' && <Dashboard greeting={greeting} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} memoryTotal={memoryStats.total} />}
-        {screen === 'chat' && <Chat messages={messages} command={command} setCommand={setCommand} submitCommand={submitCommand} isRouting={isRouting} />}
-        {screen === 'memory' && <Memory refreshMemory={refreshMemory} memoryRefresh={memoryRefresh} />}
-        {screen === 'integrations' && <Integrations />}
-        {screen === 'network' && <Network memoryTotal={memoryStats.total} />}
-        {screen === 'settings' && <Settings checkForUpdates={checkForUpdates} updateStatus={updateStatus} memoryCount={memoryStats.total} resetMemory={resetMemory} />}
+        {screen === 'dashboard' && <Dashboard greeting={greeting} command={command} setCommand={setCommand} submitCommand={submitCommand} sending={sending} diagnostics={diagnostics} />}
+        {screen === 'chat' && <Chat messages={messages} command={command} setCommand={setCommand} submitCommand={submitCommand} sending={sending} diagnostics={diagnostics} />}
+        {screen === 'integrations' && <Integrations settings={settings} diagnostics={diagnostics} />}
+        {screen === 'network' && <Network diagnostics={diagnostics} />}
+        {screen === 'diagnostics' && <Diagnostics diagnostics={diagnostics} refreshDiagnostics={refreshDiagnostics} />}
+        {screen === 'settings' && <Settings settings={settings} setSettings={setSettings} refreshDiagnostics={refreshDiagnostics} />}
       </section>
     </main>
   );
 }
 
-function Dashboard({ greeting, command, setCommand, submitCommand, isRouting, memoryTotal }: { greeting: string; command: string; setCommand: (value: string) => void; submitCommand: () => void; isRouting: boolean; memoryTotal: number }) {
+function Dashboard({ greeting, command, setCommand, submitCommand, sending, diagnostics }: any) {
   return (
     <section className="dashboard page-fade">
       <div className="hero-grid">
         <div className="hero-card">
           <p className="eyebrow">Noah voice identity - NoA visual system</p>
           <h2>{greeting}</h2>
-          <p>NoA now has its first Memory and Context Engine. Noah can save notes, search local memory and use your core profile while routing commands through tools and the OpenAI Brain Layer.</p>
-          <div className="command-card hero-command">
-            <Command size={20} />
-            <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Try: Noah, remember that TruShot Media needs a retainer workflow..." />
-            <button onClick={submitCommand} disabled={isRouting}>{isRouting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
-          </div>
+          <p>NoA now has the first real tool integrations. Ask about Brisbane weather, search something lightweight, save a memory, or check system status.</p>
+          <CommandBar command={command} setCommand={setCommand} submitCommand={submitCommand} sending={sending} placeholder="Ask Noah something natural..." />
         </div>
         <div className="core-card">
-          <div className="orb"><Database size={58} /></div>
-          <h3>Memory Core</h3>
-          <p>{memoryTotal} local memories active.</p>
-          <div className="meter"><span style={{ width: '78%' }} /></div>
+          <div className={`orb ${diagnostics?.brainOnline ? 'orb-online' : ''}`}><Cpu size={58} /></div>
+          <h3>NoA Core</h3>
+          <p>{diagnostics?.brainOnline ? 'OpenAI brain online.' : 'Local fallback active.'}</p>
+          <div className="meter"><span style={{ width: diagnostics?.brainOnline ? '86%' : '46%' }} /></div>
         </div>
       </div>
 
@@ -140,126 +185,68 @@ function Dashboard({ greeting, command, setCommand, submitCommand, isRouting, me
             <article className="glass-card" key={card.label}>
               <Icon size={22} />
               <p>{card.label}</p>
-              <h3>{card.label === 'Memory' ? `${memoryTotal} entries` : card.value}</h3>
+              <h3>{card.value}</h3>
               <span>{card.detail}</span>
             </article>
           );
         })}
       </div>
-
-      <div className="priority-row">
-        {priorities.map((item) => (
-          <article className="priority-card" key={item.title}>
-            <div><Zap size={18} /><strong>{item.state}</strong></div>
-            <h3>{item.title}</h3>
-            <p>{item.detail}</p>
-          </article>
-        ))}
-      </div>
     </section>
   );
 }
 
-function Chat({ messages, command, setCommand, submitCommand, isRouting }: { messages: Message[]; command: string; setCommand: (value: string) => void; submitCommand: () => void; isRouting: boolean }) {
+function Chat({ messages, command, setCommand, submitCommand, sending, diagnostics }: any) {
   return (
     <section className="chat page-fade">
       <div className="chat-intro">
         <MessageSquareText size={24} />
         <div>
           <h2>Conversation with Noah</h2>
-          <p>Alpha 0.5 can route through local tools, save/search memory, and use your context profile when OpenAI is enabled.</p>
+          <p>{diagnostics?.brainOnline ? 'OpenAI is connected. Noah can also use tools like weather, memory and diagnostics.' : 'OpenAI is not confirmed online yet. Noah can still use local tools where possible.'}</p>
         </div>
       </div>
       <div className="chat-log">
-        {messages.map((message, index) => <div key={index} className={`bubble ${message.role}`}>{message.text}</div>)}
-        {isRouting && <div className="bubble noa">Routing command through tools, memory and brain layer...</div>}
-      </div>
-      <div className="command-card docked">
-        <Sparkles size={20} />
-        <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder="Try: What do you remember about NoA?" />
-        <button onClick={submitCommand} disabled={isRouting}>{isRouting ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
-      </div>
-    </section>
-  );
-}
-
-function Memory({ refreshMemory, memoryRefresh }: { refreshMemory: () => void; memoryRefresh: number }) {
-  const [query, setQuery] = useState('');
-  const [newNote, setNewNote] = useState('');
-  const [profile, setProfile] = useState<ContextProfile>(getContextProfile());
-  const entries = useMemo(() => query.trim() ? searchMemory(query, 20) : getAllMemory(), [query, memoryRefresh]);
-  const stats = useMemo(() => getMemoryStats(), [memoryRefresh]);
-
-  const saveNote = () => {
-    if (!newNote.trim()) return;
-    addMemoryEntry({ type: 'note', title: newNote.trim().slice(0, 64), content: newNote.trim(), tags: ['manual'] });
-    setNewNote('');
-    refreshMemory();
-  };
-
-  const saveProfile = () => {
-    saveContextProfile(profile);
-    addMemoryEntry({ type: 'preference', title: 'Context profile updated', content: 'John updated the NoA context profile.', tags: ['profile'] });
-    refreshMemory();
-  };
-
-  const removeEntry = (id: string) => {
-    deleteMemory(id);
-    refreshMemory();
-  };
-
-  return (
-    <section className="memory page-fade">
-      <div className="memory-layout">
-        <article className="glass-card memory-panel">
-          <Database size={24} />
-          <h3>Memory Engine</h3>
-          <p>NoA now keeps local context in this app. This is the prototype before Supabase cloud memory.</p>
-          <div className="memory-stats">
-            <span>{stats.total} entries</span>
-            <span>{stats.pinned} pinned</span>
-            <span>{Object.keys(stats.byType).length} types</span>
+        {messages.map((message: Message, index: number) => (
+          <div key={index} className={`bubble-wrap ${message.role}`}>
+            <div className={`bubble ${message.role}`}>{message.text}</div>
+            {message.role === 'noa' && (
+              <details className="message-meta">
+                <summary>Details</summary>
+                <span>Source: {message.source || 'unknown'}</span>
+                {message.intent && <span>Intent: {message.intent}</span>}
+                {message.confidence !== undefined && <span>Confidence: {message.confidence}%</span>}
+              </details>
+            )}
           </div>
-          <div className="command-card compact">
-            <Search size={18} />
-            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search memory..." />
-          </div>
-          <textarea className="note-box" value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="Add a memory note manually..." />
-          <button className="primary" onClick={saveNote}><Save size={16} /> Save memory note</button>
-        </article>
-
-        <article className="glass-card memory-panel profile-panel">
-          <Sparkles size={24} />
-          <h3>Context Profile</h3>
-          <p>This is the always-available context Noah uses when responding.</p>
-          <label className="settings-field"><span>Name</span><input value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} /></label>
-          <label className="settings-field"><span>Mission</span><textarea value={profile.mission} onChange={(e) => setProfile({ ...profile, mission: e.target.value })} /></label>
-          <label className="settings-field"><span>Preferred tone</span><textarea value={profile.preferredTone} onChange={(e) => setProfile({ ...profile, preferredTone: e.target.value })} /></label>
-          <button className="primary" onClick={saveProfile}><Save size={16} /> Save context profile</button>
-        </article>
-      </div>
-
-      <div className="memory-list">
-        {entries.map((entry) => (
-          <article className="memory-entry" key={entry.id}>
-            <div>
-              <div className="memory-entry-head">
-                {entry.pinned && <Pin size={14} />}
-                <strong>{entry.title || entry.type}</strong>
-                <span>{entry.type}</span>
-              </div>
-              <p>{entry.content}</p>
-              <small>{new Date(entry.createdAt).toLocaleString()} {(entry.tags || []).map((tag) => `#${tag}`).join(' ')}</small>
-            </div>
-            {!entry.pinned && <button className="icon-button" onClick={() => removeEntry(entry.id)}><Trash2 size={16} /></button>}
-          </article>
         ))}
+        {sending && <div className="bubble-wrap noa"><div className="bubble noa thinking"><Loader2 className="spin" size={16} /> Noah is thinking...</div></div>}
       </div>
+      <CommandBar command={command} setCommand={setCommand} submitCommand={submitCommand} sending={sending} placeholder="Talk to Noah..." docked />
     </section>
   );
 }
 
-function Integrations() {
+function CommandBar({ command, setCommand, submitCommand, sending, placeholder, docked }: any) {
+  return (
+    <div className={`command-card ${docked ? 'docked' : 'hero-command'}`}>
+      <Sparkles size={20} />
+      <input value={command} onChange={(e) => setCommand(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submitCommand()} placeholder={placeholder} />
+      <button onClick={submitCommand} disabled={sending}>{sending ? <Loader2 className="spin" size={18} /> : <Send size={18} />}</button>
+    </div>
+  );
+}
+
+function Integrations({ settings, diagnostics }: { settings: NoASettings; diagnostics: NoADiagnostics | null }) {
+  const integrations = [
+    { name: 'OpenAI', description: 'Brain layer for natural Noah responses', status: diagnostics?.brainOnline ? 'connected' : settings.hasOpenAIKey ? 'error' : 'missing', health: diagnostics?.brainOnline ? 92 : 28 },
+    { name: 'Local Tools', description: 'Briefings, diagnostics, memory and tool list', status: 'connected', health: 84 },
+    { name: 'Weather', description: 'Live forecast data through Open-Meteo', status: 'connected', health: 86 },
+    { name: 'Web Search', description: 'Lightweight web lookup through DuckDuckGo Instant Answer', status: 'connected', health: 48 },
+    { name: 'Memory', description: 'Local saved context and reminders', status: 'connected', health: settings.memoryCount ? 68 : 44 },
+    { name: 'Notion', description: 'Planned task and job integration', status: 'planned', health: 12 },
+    { name: 'Optra', description: 'Planned client and job integration', status: 'planned', health: 12 }
+  ];
+
   return (
     <section className="page-fade integrations-grid">
       {integrations.map((item) => (
@@ -278,75 +265,125 @@ function Integrations() {
   );
 }
 
-function Network({ memoryTotal }: { memoryTotal: number }) {
-  const nodes = ['OpenAI', 'Memory', 'Supabase', 'Optra', 'Notion', 'Gmail', 'Calendar', 'Xero', 'Meta', 'Tools'];
+function Network({ diagnostics }: { diagnostics: NoADiagnostics | null }) {
+  const nodes = ['OpenAI', 'Weather', 'Search', 'Memory', 'Tools', 'Notion', 'Optra', 'Calendar', 'Spotify', 'Displays'];
   return (
     <section className="network page-fade">
       <div className="scanline" />
       <div className="network-panel left">
         <p className="eyebrow">Live topology</p>
-        <h3>System graph</h3>
-        <p>Memory now sits between Noah, the Tool Engine and future integrations.</p>
+        <h3>{diagnostics?.brainOnline ? 'OpenAI linked' : 'Fallback mode'}</h3>
+        <p>Connections will become live as integrations are added.</p>
       </div>
       <div className="network-panel right">
-        <p className="eyebrow">Engine state</p>
-        <h3>{toolRegistry.length} tools active</h3>
-        <p>{memoryTotal} local memories. {toolRegistry.map((tool) => tool.label).join(', ')}</p>
+        <p className="eyebrow">Last API state</p>
+        <h3>{diagnostics?.lastApiStatus || 'Not tested'}</h3>
+        <p>{diagnostics?.lastApiLatencyMs ? `${diagnostics.lastApiLatencyMs}ms latency` : 'Run a test from Settings.'}</p>
       </div>
-      <div className="network-core"><span>NoA</span><small>Core</small></div>
-      {nodes.map((node, index) => <div key={node} className={`network-node n${index + 1}`}>{node}</div>)}
-      {nodes.map((node, index) => <div key={`${node}-line`} className={`pulse-line l${index + 1}`} />)}
+      <div className={`network-core ${diagnostics?.brainOnline ? 'online' : ''}`}><span>NoA</span><small>Core</small></div>
+      {nodes.map((node, index) => <div key={node} className={`network-node n${index + 1} ${node === 'OpenAI' && diagnostics?.brainOnline ? 'hot' : ''}`}>{node}</div>)}
+      {nodes.map((node, index) => <div key={`${node}-line`} className={`pulse-line l${index + 1} ${diagnostics?.brainOnline ? 'active-line' : ''}`} />)}
     </section>
   );
 }
 
-function Settings({ checkForUpdates, updateStatus, memoryCount, resetMemory }: { checkForUpdates: () => void; updateStatus: string; memoryCount: number; resetMemory: () => void }) {
-  const [openAISettings, setOpenAISettings] = useState<OpenAISettings>(getOpenAISettings());
-  const [aiStatus, setAiStatus] = useState('Not tested');
+function Diagnostics({ diagnostics, refreshDiagnostics }: { diagnostics: NoADiagnostics | null; refreshDiagnostics: () => void }) {
+  const rows = [
+    ['Provider', diagnostics?.provider],
+    ['Brain online', diagnostics?.brainOnline ? 'Yes' : 'No'],
+    ['API key saved', diagnostics?.apiKeySaved ? 'Yes' : 'No'],
+    ['Model', diagnostics?.model],
+    ['Last API request', diagnostics?.lastApiRequestAt || 'None'],
+    ['Last API status', diagnostics?.lastApiStatus],
+    ['Last latency', diagnostics?.lastApiLatencyMs ? `${diagnostics.lastApiLatencyMs}ms` : 'None'],
+    ['Last response source', diagnostics?.lastResponseSource],
+    ['Last intent', diagnostics?.lastIntent],
+    ['Last confidence', `${diagnostics?.lastConfidence || 0}%`],
+    ['Tools registered', diagnostics?.toolsRegistered],
+    ['Last tool', diagnostics?.lastToolName],
+    ['Tool status', diagnostics?.lastToolStatus],
+    ['Tool latency', diagnostics?.lastToolLatencyMs ? `${diagnostics.lastToolLatencyMs}ms` : 'None'],
+    ['Tool error', diagnostics?.lastToolError || 'None'],
+    ['Memory entries', diagnostics?.memoryEntries],
+    ['Last error', diagnostics?.lastApiError || 'None']
+  ];
 
-  const saveAI = () => {
-    saveOpenAISettings(openAISettings);
-    setAiStatus(openAISettings.enabled && openAISettings.apiKey ? 'Saved. OpenAI brain layer enabled.' : 'Saved. OpenAI brain layer disabled.');
+  return (
+    <section className="settings page-fade">
+      <article className="glass-card wide">
+        <Activity size={24} />
+        <h3>Brain diagnostics</h3>
+        <p>This panel confirms whether NoA is actually calling OpenAI or falling back locally.</p>
+        <button className="primary" onClick={refreshDiagnostics}><Activity size={16} /> Refresh diagnostics</button>
+      </article>
+      <div className="diagnostic-grid">
+        {rows.map(([label, value]) => (
+          <article className="diagnostic-row" key={String(label)}>
+            <span>{label}</span>
+            <strong>{String(value ?? 'Unknown')}</strong>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function Settings({ settings, setSettings, refreshDiagnostics }: any) {
+  const [apiKey, setApiKey] = useState('');
+  const [model, setModel] = useState(settings.openaiModel || 'gpt-4.1-mini');
+  const [testResult, setTestResult] = useState('Not tested');
+  const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setModel(settings.openaiModel || 'gpt-4.1-mini');
+  }, [settings.openaiModel]);
+
+  const save = async () => {
+    setSaving(true);
+    const next = await window.noa?.saveSettings({ openaiApiKey: apiKey, openaiModel: model });
+    if (next) setSettings(next);
+    setApiKey('');
+    setSaving(false);
+    refreshDiagnostics();
   };
 
-  const testAI = async () => {
-    saveOpenAISettings(openAISettings);
-    setAiStatus('Testing OpenAI connection...');
-    const result = await testOpenAIConnection();
-    setAiStatus(result.ok ? result.text : result.message);
+  const testOpenAI = async () => {
+    setTesting(true);
+    setTestResult('Testing real OpenAI request...');
+    const result = await window.noa?.testOpenAI();
+    setTestResult(result?.ok ? `Success: ${result.text || 'OpenAI responded.'}` : `Failed: ${result?.lastApiError || 'Unknown error'}`);
+    setTesting(false);
+    refreshDiagnostics();
   };
 
   return (
     <section className="settings page-fade">
       <article className="glass-card wide">
-        <Sparkles size={24} />
-        <h3>OpenAI Brain Layer</h3>
-        <p>Enable OpenAI to let Noah reason over local tool and memory results. Your key is stored locally on this computer during alpha development.</p>
-        <label className="settings-field"><span>Enable OpenAI</span><input type="checkbox" checked={openAISettings.enabled} onChange={(e) => setOpenAISettings({ ...openAISettings, enabled: e.target.checked })} /></label>
-        <label className="settings-field"><span>Model</span><input value={openAISettings.model} onChange={(e) => setOpenAISettings({ ...openAISettings, model: e.target.value })} placeholder="gpt-5.5" /></label>
-        <label className="settings-field"><span>API key</span><input type="password" value={openAISettings.apiKey || ''} onChange={(e) => setOpenAISettings({ ...openAISettings, apiKey: e.target.value })} placeholder="sk-..." /></label>
-        <div className="settings-actions"><button className="primary" onClick={saveAI}>Save OpenAI settings</button><button className="primary" onClick={testAI}>Test connection</button></div>
-        <span>{aiStatus}</span>
+        <KeyRound size={24} />
+        <h3>Brain + Tool Layer</h3>
+        <p>Save your API key here. Weather and lightweight search work without an OpenAI key, but natural reasoning needs OpenAI. Never commit your key to GitHub.</p>
+        <label>API key</label>
+        <input className="settings-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={settings.hasOpenAIKey ? 'API key saved - leave blank to keep existing key' : 'Paste OpenAI API key'} />
+        <label>Model</label>
+        <input className="settings-input" value={model} onChange={(e) => setModel(e.target.value)} placeholder="gpt-4.1-mini" />
+        <div className="button-row">
+          <button className="primary" onClick={save} disabled={saving}>{saving ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />} Save settings</button>
+          <button className="secondary" onClick={testOpenAI} disabled={testing}>{testing ? <Loader2 className="spin" size={16} /> : <ArrowUpRight size={16} />} Test OpenAI connection</button>
+        </div>
+        <span>{testResult}</span>
       </article>
       <article className="glass-card wide">
         <DownloadCloud size={24} />
         <h3>Auto updates</h3>
-        <p>NoA is configured for GitHub Releases through electron-updater. Packaged builds can check and install updates.</p>
-        <button className="primary" onClick={checkForUpdates}>{updateStatus === 'Checking...' ? <Loader2 className="spin" size={16} /> : <DownloadCloud size={16} />} Check for updates</button>
-        <span>{updateStatus}</span>
-      </article>
-      <article className="glass-card wide">
-        <TerminalSquare size={24} />
-        <h3>Memory + Tool Engine</h3>
-        <p>Mode: {noaSettings.mode}. Local memory entries: {memoryCount}. Available tools: {toolRegistry.length}.</p>
-        <button className="primary" onClick={resetMemory}>Reset local memory to starter context</button>
+        <p>Auto updates run once NoA is packaged and released through GitHub Releases. Dev mode will not auto-update.</p>
       </article>
     </section>
   );
 }
 
 function screenTitle(screen: Screen) {
-  return ({ dashboard: 'Command Centre', chat: 'Conversation', memory: 'Memory Core', integrations: 'Integrations', network: 'Network Core', settings: 'Settings' } as const)[screen];
+  return ({ dashboard: 'Command Centre', chat: 'Conversation', integrations: 'Integrations', network: 'Network Core', diagnostics: 'Diagnostics', settings: 'Settings' } as const)[screen];
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

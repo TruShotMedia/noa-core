@@ -1,29 +1,17 @@
-# NoA Core
+# NoA Core - Alpha 0.7
 
-NoA is the visual desktop interface for Noah, the spoken Noetic Advisor.
+NoA Alpha 0.7 adds first practical tool integrations: live weather, lightweight web lookup, local memory, diagnostics, and OpenAI-backed natural conversation when an API key is saved.
 
-## Alpha 0.5 - Memory & Context Engine
-
-This build adds the first local memory system:
-
-- Memory page
-- Context profile
-- Manual memory notes
-- Searchable local memory
-- Remember Note tool
-- Search Memory tool
-- Context Snapshot tool
-- OpenAI responses can now include NoA context
-
-## Development
+## Install
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Build
+## Test prompts
 
-```bash
-npm run dist
-```
+- Noah, what is the weather in Brisbane today?
+- Noah, search web OpenAI Responses API
+- Noah, what tools can you use?
+- Noah, remember that TruShot needs a retainer workflow

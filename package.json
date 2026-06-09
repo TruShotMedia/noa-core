@@ -1,6 +1,6 @@
 {
   "name": "noa-core",
-  "version": "0.9.0-alpha.1",
+  "version": "1.0.0-alpha.1",
   "description": "NoA - Noetic Advisor desktop intelligence layer. Visually NoA, spoken as Noah.",
   "author": "TruShot Media",
   "private": true,

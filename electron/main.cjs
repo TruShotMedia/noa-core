@@ -35,7 +35,7 @@ let diagnostics = {
   lastApiLatencyMs: null,
   lastApiError: null,
   lastResponseSource: 'none',
-  toolsRegistered: 11,
+  toolsRegistered: 14,
   memoryEntries: 0,
   lastToolName: 'none',
   lastToolStatus: 'idle',
@@ -193,19 +193,29 @@ function routeIntent(message) {
   if (m.includes('remember')) return { intent: 'remember', confidence: 92 };
   if (m.includes('weather') || m.includes('forecast') || m.includes('temperature') || m.includes('rain')) return { intent: 'weather_lookup', confidence: 91 };
   if (m.includes('notion') && (m.includes('test') || m.includes('connect'))) return { intent: 'notion_status', confidence: 88 };
+  if (m.includes('briefing') || m.includes('what should i focus') || m.includes('focus on') || m.includes('attention') || m.includes('what is on today') || m.includes("what's on today") || m.includes('today')) return { intent: 'workspace_briefing', confidence: 92 };
+  if (m.includes('client') || m.includes('omf') || m.includes('edgepro') || m.includes('css touring') || m.includes('ontop') || m.includes('on top') || m.includes('gc elite') || m.includes('loco')) return { intent: 'client_intelligence', confidence: 87 };
+  if (m.includes('this week') || m.includes('due soon') || m.includes('upcoming')) return { intent: 'due_soon', confidence: 86 };
   if (m.includes('task') || m.includes('due today') || m.includes('to do') || m.includes('todo') || m.includes('overdue')) return { intent: 'notion_tasks', confidence: 90 };
   if (m.includes('job') || m.includes('shoot') || m.includes('booking') || m.includes('pipeline')) return { intent: 'notion_jobs', confidence: 88 };
   if (m.includes('search') || m.includes('look up') || m.includes('latest') || m.includes('google') || m.includes('web')) return { intent: 'web_search', confidence: 82 };
   if (m.includes('what do you remember') || m.includes('memory')) return { intent: 'memory_lookup', confidence: 86 };
   if (m.includes('status') || m.includes('diagnostic') || m.includes('online')) return { intent: 'system_status', confidence: 84 };
   if (m.includes('tool') || m.includes('what can you use')) return { intent: 'tool_list', confidence: 88 };
-  if (m.includes('today') || m.includes('attention') || m.includes('priority') || m.includes('briefing')) return { intent: 'todays_briefing', confidence: 82 };
   return { intent: 'openai_general_response', confidence: 68 };
 }
 
 async function executeToolForIntent(intent, message, settings) {
   const toolMap = {
-    weather_lookup: 'getWeather', web_search: 'webSearchLite', notion_tasks: 'getNotionTasks', notion_jobs: 'getNotionJobs', todays_briefing: 'getCombinedBriefing', notion_status: 'testNotion'
+    weather_lookup: 'getWeather',
+    web_search: 'webSearchLite',
+    notion_tasks: 'getNotionTasks',
+    notion_jobs: 'getNotionJobs',
+    todays_briefing: 'getCombinedBriefing',
+    workspace_briefing: 'getWorkspaceBriefing',
+    client_intelligence: 'getClientIntelligence',
+    due_soon: 'getDueSoon',
+    notion_status: 'testNotion'
   };
   if (!toolMap[intent]) return null;
   const started = Date.now(); diagnostics.lastToolName = toolMap[intent]; diagnostics.lastToolStatus = 'running'; diagnostics.lastToolLatencyMs = null; diagnostics.lastToolError = null;
@@ -215,7 +225,9 @@ async function executeToolForIntent(intent, message, settings) {
     if (intent === 'web_search') result = await webSearchLite(message);
     if (intent === 'notion_tasks') result = await getNotionTasks(settings, message);
     if (intent === 'notion_jobs') result = await getNotionJobs(settings, message);
-    if (intent === 'todays_briefing') result = await getCombinedBriefing(settings, message);
+    if (intent === 'todays_briefing' || intent === 'workspace_briefing') result = await getWorkspaceBriefing(settings, message);
+    if (intent === 'client_intelligence') result = await getClientIntelligence(settings, message);
+    if (intent === 'due_soon') result = await getDueSoon(settings, message);
     if (intent === 'notion_status') result = await getNotionStatus(settings);
     diagnostics.lastToolStatus = result.ok ? 'success' : 'limited'; diagnostics.lastToolLatencyMs = Date.now() - started; diagnostics.lastToolError = result.ok ? null : result.error || result.note || 'Tool returned limited data.';
     return result;
@@ -325,11 +337,52 @@ async function getNotionJobs(settings, _message) {
   return { ok: true, tool: 'getNotionJobs', provider: 'Notion', count: items.length, items };
 }
 async function getCombinedBriefing(settings, message) {
-  const results = [];
-  if (settings.notionTasksDatabaseId) results.push(await getNotionTasks(settings, message));
-  if (settings.notionJobsDatabaseId) results.push(await getNotionJobs(settings, message));
-  if (!results.length) return { ok: false, tool: 'getCombinedBriefing', note: 'Notion is not configured yet, so I can only provide the prototype briefing.' };
-  return { ok: true, tool: 'getCombinedBriefing', provider: 'Notion', results };
+  return getWorkspaceBriefing(settings, message);
+}
+function daysFromToday(dateValue) {
+  if (!dateValue) return null;
+  const today = new Date(todayISO() + 'T00:00:00');
+  const target = new Date(String(dateValue).slice(0, 10) + 'T00:00:00');
+  if (Number.isNaN(target.getTime())) return null;
+  return Math.round((target - today) / 86400000);
+}
+function inNextDays(dateValue, days) {
+  const diff = daysFromToday(dateValue);
+  return diff !== null && diff >= 0 && diff <= days;
+}
+function extractClientKeyword(message) {
+  const m = String(message).toLowerCase();
+  const known = ['edgepro', 'omf', 'css touring', 'on top roofing', 'ontoproofing', 'gc elite', 'loco tattoo', 'built by lune', 'voltage energy'];
+  return known.find((k) => m.includes(k)) || '';
+}
+async function getWorkspaceBriefing(settings, message) {
+  const tasksResult = settings.notionTasksDatabaseId ? await getNotionTasks(settings, message) : null;
+  const jobsResult = settings.notionJobsDatabaseId ? await getNotionJobs(settings, message) : null;
+  if (!tasksResult && !jobsResult) return { ok: false, tool: 'getWorkspaceBriefing', note: 'Notion is not configured yet, so I can only provide the prototype briefing.' };
+  const tasks = tasksResult?.items || [];
+  const jobs = jobsResult?.items || [];
+  const overdueTasks = tasks.filter((i) => daysFromToday(i.date) !== null && daysFromToday(i.date) < 0);
+  const todayTasks = tasks.filter((i) => daysFromToday(i.date) === 0);
+  const weekTasks = tasks.filter((i) => inNextDays(i.date, 7));
+  const weekJobs = jobs.filter((i) => inNextDays(i.date, 7));
+  const priorityTasks = tasks.filter((i) => /urgent|high/i.test(i.priority || i.status || '')).slice(0, 6);
+  diagnostics.notionConnected = true; diagnostics.lastNotionStatus = 'Success'; diagnostics.lastNotionError = null;
+  return { ok: true, tool: 'getWorkspaceBriefing', provider: 'Notion', summary: { openTasks: tasks.length, openJobs: jobs.length, overdueTasks: overdueTasks.length, todayTasks: todayTasks.length, weekTasks: weekTasks.length, weekJobs: weekJobs.length }, overdueTasks, todayTasks, weekTasks: weekTasks.slice(0, 10), weekJobs: weekJobs.slice(0, 10), priorityTasks, tasks: tasks.slice(0, 12), jobs: jobs.slice(0, 12) };
+}
+async function getClientIntelligence(settings, message) {
+  const keyword = extractClientKeyword(message);
+  const jobsResult = settings.notionJobsDatabaseId ? await getNotionJobs(settings, message) : { ok: true, items: [] };
+  const tasksResult = settings.notionTasksDatabaseId ? await getNotionTasks(settings, message) : { ok: true, items: [] };
+  const hay = (item) => `${item.title} ${item.client} ${item.status}`.toLowerCase();
+  const filter = (item) => !keyword || hay(item).includes(keyword);
+  return { ok: true, tool: 'getClientIntelligence', provider: 'Notion', client: keyword || 'requested client', jobs: (jobsResult.items || []).filter(filter).slice(0, 10), tasks: (tasksResult.items || []).filter(filter).slice(0, 10) };
+}
+async function getDueSoon(settings, message) {
+  const tasksResult = settings.notionTasksDatabaseId ? await getNotionTasks(settings, message) : { ok: true, items: [] };
+  const jobsResult = settings.notionJobsDatabaseId ? await getNotionJobs(settings, message) : { ok: true, items: [] };
+  const dueTasks = (tasksResult.items || []).filter((i) => inNextDays(i.date, 7)).slice(0, 12);
+  const dueJobs = (jobsResult.items || []).filter((i) => inNextDays(i.date, 7)).slice(0, 12);
+  return { ok: true, tool: 'getDueSoon', provider: 'Notion', dueTasks, dueJobs };
 }
 async function getNotionStatus(settings) {
   if (!settings.notionApiKey) return { ok: false, tool: 'testNotion', note: 'No Notion API key saved.' };
@@ -346,7 +399,7 @@ function buildToolContext(intent, settings, diag, toolResult) {
   return {
     intent,
     diagnostics: { provider: diag.provider, apiKeySaved: Boolean(settings.openaiApiKey), model: settings.openaiModel || defaultStore.openaiModel, notionConnected: diag.notionConnected, notionConfigured: Boolean(settings.notionApiKey && (settings.notionTasksDatabaseId || settings.notionJobsDatabaseId)), toolsRegistered: diag.toolsRegistered, memoryEntries: memories.length, lastToolName: diag.lastToolName, lastToolStatus: diag.lastToolStatus },
-    availableTools: ['getTodaysBriefing', 'getSystemStatus', 'listTools', 'rememberContext', 'getWeather', 'webSearchLite', 'memoryLookup', 'diagnosticsStatus', 'getNotionTasks', 'getNotionJobs', 'getCombinedBriefing'],
+    availableTools: ['getTodaysBriefing', 'getWorkspaceBriefing', 'getClientIntelligence', 'getDueSoon', 'getSystemStatus', 'listTools', 'rememberContext', 'getWeather', 'webSearchLite', 'memoryLookup', 'diagnosticsStatus', 'getNotionTasks', 'getNotionJobs', 'getCombinedBriefing'],
     prototypeBriefing: { activeJobs: 3, outstandingTasks: 7, meetings: 1, priorityFocus: 'Connect Notion and Optra data so Noah can brief from live systems.' },
     memories,
     toolResult
@@ -354,7 +407,7 @@ function buildToolContext(intent, settings, diag, toolResult) {
 }
 function buildNoahPrompt({ message, history, toolContext }) {
   return [
-    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
+    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'For workspace briefings, group information into: immediate focus, overdue/today, upcoming this week, and recommended next move.', 'For client intelligence, summarise jobs and tasks connected to that client or keyword.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
     { role: 'user', content: [`Current user message: ${message}`, '', `Recent conversation: ${JSON.stringify(history)}`, '', `NoA tool/context state: ${JSON.stringify(toolContext, null, 2)}`].join('\n') }
   ];
 }
@@ -375,18 +428,36 @@ function formatItems(label, items) {
   if (!items?.length) return `I didn’t find any open ${label}.`;
   return items.map((item, index) => `${index + 1}. ${item.title}${item.date ? ` - ${item.date}` : ''}${item.status ? ` (${item.status})` : ''}${item.client ? ` - ${item.client}` : ''}`).join('\n');
 }
+
+function formatWorkspaceBriefing(result) {
+  const s = result.summary || {};
+  const lines = [];
+  lines.push(`Here’s your workspace briefing: ${s.openTasks || 0} open tasks and ${s.openJobs || 0} open jobs.`);
+  if (s.overdueTasks) lines.push(`You have ${s.overdueTasks} overdue task${s.overdueTasks === 1 ? '' : 's'} that need attention.`);
+  if (s.todayTasks) lines.push(`You have ${s.todayTasks} task${s.todayTasks === 1 ? '' : 's'} due today.`);
+  if (s.weekJobs) lines.push(`${s.weekJobs} job${s.weekJobs === 1 ? '' : 's'} are coming up this week.`);
+  if (result.priorityTasks?.length) lines.push(`\nPriority tasks:\n${formatItems('priority tasks', result.priorityTasks.slice(0, 5))}`);
+  if (result.todayTasks?.length) lines.push(`\nDue today:\n${formatItems('today tasks', result.todayTasks.slice(0, 5))}`);
+  if (result.weekJobs?.length) lines.push(`\nUpcoming jobs:\n${formatItems('jobs', result.weekJobs.slice(0, 5))}`);
+  lines.push('\nRecommended next move: clear anything overdue or due today first, then move into the nearest upcoming client job.');
+  return lines.join('\n');
+}
+
 function localFallbackResponse(intent, context) {
   const tr = context.toolResult;
   if (intent === 'weather_lookup') return tr?.ok ? formatWeather(tr) : `I tried to use the weather tool, but it failed: ${tr?.error || tr?.note || 'Unknown issue'}.`;
   if (intent === 'web_search') return tr?.ok ? `I found this using lightweight web search:\n${[tr.abstract, ...(tr.results || []).map((r) => `- ${r.text}`)].filter(Boolean).join('\n')}` : (tr?.note || 'The lightweight web search tool did not return a useful result.');
   if (intent === 'notion_tasks') return tr?.ok ? `Here’s what I found in Notion tasks:\n${formatItems('tasks', tr.items)}` : `I couldn’t pull Notion tasks yet: ${tr?.note || tr?.error || 'unknown issue'}`;
   if (intent === 'notion_jobs') return tr?.ok ? `Here’s what I found in Notion jobs:\n${formatItems('jobs', tr.items)}` : `I couldn’t pull Notion jobs yet: ${tr?.note || tr?.error || 'unknown issue'}`;
+  if (intent === 'workspace_briefing') return tr?.ok ? formatWorkspaceBriefing(tr) : `I couldn’t build your workspace briefing yet: ${tr?.note || tr?.error || 'unknown issue'}`;
+  if (intent === 'client_intelligence') return tr?.ok ? `Here’s what I found for ${tr.client}:\n\nJobs:\n${formatItems('jobs', tr.jobs)}\n\nTasks:\n${formatItems('tasks', tr.tasks)}` : `I couldn’t pull client intelligence yet: ${tr?.note || tr?.error || 'unknown issue'}`;
+  if (intent === 'due_soon') return tr?.ok ? `Due this week:\n\nTasks:\n${formatItems('tasks', tr.dueTasks)}\n\nJobs:\n${formatItems('jobs', tr.dueJobs)}` : `I couldn’t pull due-soon items yet: ${tr?.note || tr?.error || 'unknown issue'}`;
   if (intent === 'todays_briefing') {
     if (tr?.ok && tr.results) return tr.results.map((r) => r.ok ? `${r.tool}:\n${formatItems(r.tool.includes('Task') ? 'tasks' : 'jobs', r.items)}` : r.note).join('\n\n');
     const brief = context.prototypeBriefing; return `Here’s your prototype briefing: ${brief.activeJobs} active jobs, ${brief.outstandingTasks} outstanding tasks and ${brief.meetings} meeting. Priority focus: ${brief.priorityFocus}`;
   }
   if (intent === 'notion_status') return tr?.ok ? 'Notion is connected and at least one configured database is reachable.' : `Notion is not ready yet: ${tr?.note || tr?.error || 'check settings.'}`;
-  if (intent === 'system_status') return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather, lightweight web search and Notion integration are available in Alpha 0.9.';
+  if (intent === 'system_status') return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather, lightweight web search and Workspace Intelligence are available in Alpha 1.0.';
   if (intent === 'tool_list') return `Right now I can use: ${context.availableTools.join(', ')}.`;
   if (intent === 'memory_lookup') return context.memories?.length ? `Here’s what I remember locally:\n${context.memories.map((m) => `- ${m.text}`).join('\n')}` : 'I do not have any saved local memories yet.';
   return 'I’m here. OpenAI may be offline or unavailable right now, so I’m answering from NoA’s local fallback layer.';

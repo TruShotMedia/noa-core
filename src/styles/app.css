@@ -106,3 +106,34 @@ h1,h2,h3,p { margin-top: 0; } h1 { margin-bottom: 0; font-size: 34px; letter-spa
   text-transform: uppercase;
   letter-spacing: .08em;
 }
+
+
+.voice-hero { position: relative; overflow: hidden; }
+.voice-hero::after {
+  content: "";
+  position: absolute;
+  right: 28px;
+  top: 28px;
+  width: 140px;
+  height: 140px;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(96,165,250,.18), transparent 70%);
+  pointer-events: none;
+}
+.voice-transcript {
+  min-height: 96px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(0,0,0,.22);
+  color: rgba(255,255,255,.78);
+  line-height: 1.65;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 0 16px;
+  color: rgba(255,255,255,.82);
+}
+.checkbox-row input { width: 18px; height: 18px; }
+.muted-copy { color: rgba(255,255,255,.52); font-size: 13px; }

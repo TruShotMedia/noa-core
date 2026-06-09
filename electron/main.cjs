@@ -13,7 +13,9 @@ const defaultStore = {
   notionTasksDatabaseId: '',
   notionJobsDatabaseId: '',
   memories: [],
-  webSearchProvider: 'duckduckgo-lite'
+  webSearchProvider: 'duckduckgo-lite',
+  voiceAutoSpeak: false,
+  voiceWakeWord: 'Noah'
 };
 
 let diagnostics = {
@@ -77,7 +79,9 @@ function safeSettings(settings = readStore()) {
     notionTasksDatabaseId: settings.notionTasksDatabaseId || '',
     notionJobsDatabaseId: settings.notionJobsDatabaseId || '',
     memoryCount: Array.isArray(settings.memories) ? settings.memories.length : 0,
-    webSearchProvider: settings.webSearchProvider || 'duckduckgo-lite'
+    webSearchProvider: settings.webSearchProvider || 'duckduckgo-lite',
+    voiceAutoSpeak: Boolean(settings.voiceAutoSpeak),
+    voiceWakeWord: settings.voiceWakeWord || 'Noah'
   };
 }
 function updateDiagnosticsFromStore(settings = readStore()) {
@@ -117,7 +121,9 @@ ipcMain.handle('noa:save-settings', async (_event, settings) => {
     openaiModel: settings.openaiModel || current.openaiModel || defaultStore.openaiModel,
     notionTasksDatabaseId: typeof settings.notionTasksDatabaseId === 'string' ? settings.notionTasksDatabaseId.trim() : current.notionTasksDatabaseId,
     notionJobsDatabaseId: typeof settings.notionJobsDatabaseId === 'string' ? settings.notionJobsDatabaseId.trim() : current.notionJobsDatabaseId,
-    webSearchProvider: settings.webSearchProvider || current.webSearchProvider || 'duckduckgo-lite'
+    webSearchProvider: settings.webSearchProvider || current.webSearchProvider || 'duckduckgo-lite',
+    voiceAutoSpeak: typeof settings.voiceAutoSpeak === 'boolean' ? settings.voiceAutoSpeak : Boolean(current.voiceAutoSpeak),
+    voiceWakeWord: typeof settings.voiceWakeWord === 'string' && settings.voiceWakeWord.trim() ? settings.voiceWakeWord.trim() : (current.voiceWakeWord || 'Noah')
   };
   if (typeof settings.openaiApiKey === 'string' && settings.openaiApiKey.trim()) next.openaiApiKey = settings.openaiApiKey.trim();
   if (typeof settings.notionApiKey === 'string' && settings.notionApiKey.trim()) next.notionApiKey = settings.notionApiKey.trim();
@@ -315,6 +321,7 @@ ipcMain.handle('noa:check-for-updates', async () => {
 
 function routeIntent(message) {
   const m = message.toLowerCase();
+  if (m.includes('voice') || m.includes('speak') || m.includes('read aloud') || m.includes('wake word')) return { intent: 'voice_status', confidence: 88 };
   if (m.includes('remember')) return { intent: 'remember', confidence: 92 };
   if (m.includes('knowledge graph') || m.includes('relationship map') || m.includes('entities') || m.includes('map my workspace') || m.includes('client map')) return { intent: 'knowledge_graph', confidence: 91 };
   if (m.includes('weather') || m.includes('forecast') || m.includes('temperature') || m.includes('rain')) return { intent: 'weather_lookup', confidence: 91 };
@@ -342,7 +349,8 @@ async function executeToolForIntent(intent, message, settings) {
     client_intelligence: 'getClientIntelligence',
     due_soon: 'getDueSoon',
     notion_status: 'testNotion',
-    knowledge_graph: 'getKnowledgeGraph'
+    knowledge_graph: 'getKnowledgeGraph',
+    voice_status: 'getVoiceStatus'
   };
   if (!toolMap[intent]) return null;
   const started = Date.now(); diagnostics.lastToolName = toolMap[intent]; diagnostics.lastToolStatus = 'running'; diagnostics.lastToolLatencyMs = null; diagnostics.lastToolError = null;
@@ -357,6 +365,7 @@ async function executeToolForIntent(intent, message, settings) {
     if (intent === 'due_soon') result = await getDueSoon(settings, message);
     if (intent === 'notion_status') result = await getNotionStatus(settings);
     if (intent === 'knowledge_graph') result = await getKnowledgeGraph(settings);
+    if (intent === 'voice_status') result = { ok: true, tool: 'getVoiceStatus', wakeWord: settings.voiceWakeWord || 'Noah', autoSpeak: Boolean(settings.voiceAutoSpeak), note: 'Manual voice input and speech output are available in Alpha 1.3. Always-on wake-word detection is planned for a later local audio service.' };
     diagnostics.lastToolStatus = result.ok ? 'success' : 'limited'; diagnostics.lastToolLatencyMs = Date.now() - started; diagnostics.lastToolError = result.ok ? null : result.error || result.note || 'Tool returned limited data.';
     return result;
   } catch (error) {
@@ -600,7 +609,7 @@ function buildToolContext(intent, settings, diag, toolResult) {
 }
 function buildNoahPrompt({ message, history, toolContext }) {
   return [
-    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'For workspace briefings, group information into: immediate focus, overdue/today, upcoming this week, and recommended next move.', 'For client intelligence, summarise jobs and tasks connected to that client or keyword.', 'When knowledge graph data is provided, explain the important relationships between clients, tasks, jobs, time buckets and statuses.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
+    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'For workspace briefings, group information into: immediate focus, overdue/today, upcoming this week, and recommended next move.', 'For client intelligence, summarise jobs and tasks connected to that client or keyword.', 'When knowledge graph data is provided, explain the important relationships between clients, tasks, jobs, time buckets and statuses.', 'When voice status is provided, explain clearly what voice can do now and what is planned next.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
     { role: 'user', content: [`Current user message: ${message}`, '', `Recent conversation: ${JSON.stringify(history)}`, '', `NoA tool/context state: ${JSON.stringify(toolContext, null, 2)}`].join('\n') }
   ];
 }
@@ -651,6 +660,7 @@ function localFallbackResponse(intent, context) {
   }
   if (intent === 'knowledge_graph') return tr?.ok ? `I built a workspace knowledge graph with ${tr.entities?.length || 0} entities and ${tr.relations?.length || 0} relationships. Key clusters: ${(tr.clusters || []).map((c) => `${c.type} (${c.count})`).join(', ')}.` : `I couldn't build the knowledge graph yet: ${tr?.error || tr?.note || 'unknown issue'}`;
   if (intent === 'notion_status') return tr?.ok ? 'Notion is connected and at least one configured database is reachable.' : `Notion is not ready yet: ${tr?.note || tr?.error || 'check settings.'}`;
+  if (intent === 'voice_status') return `Voice foundation is active. Wake phrase target: ${tr?.wakeWord || 'Noah'}. Auto-speak is ${tr?.autoSpeak ? 'enabled' : 'disabled'}. Manual voice input and text-to-speech are available from the Voice screen; always-on wake-word detection is planned for a later local audio service.`;
   if (intent === 'system_status') return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather, lightweight web search and Workspace Intelligence are available in Alpha 1.0.';
   if (intent === 'tool_list') return `Right now I can use: ${context.availableTools.join(', ')}.`;
   if (intent === 'memory_lookup') return context.memories?.length ? `Here’s what I remember locally:\n${context.memories.map((m) => `- ${m.text}`).join('\n')}` : 'I do not have any saved local memories yet.';

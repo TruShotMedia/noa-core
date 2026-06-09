@@ -1,26 +1,24 @@
-# NoA Core - Alpha 1.0 Workspace Intelligence
+# NoA Core - Alpha 1.2
 
 NoA is the visual desktop interface for Noah, the spoken Noetic Advisor.
 
-Alpha 1.0 upgrades NoA from a connected shell into a workspace intelligence layer.
+## Alpha 1.2 adds
 
-## Highlights
+- Knowledge Graph foundation
+- New Knowledge screen
+- Entity extraction from live Notion tasks and jobs
+- Relationship mapping between clients, jobs, tasks, statuses and time buckets
+- Chat intent for knowledge graph questions
+- Diagnostics for entity and relationship counts
 
-- Daily briefing prompts
-- Real Notion task and job summaries
-- Client-aware search patterns
-- Due today / overdue / this week intent routing
-- OpenAI reasoning over real tool results
-- Diagnostics for OpenAI and Notion
-
-## Development
+## Run
 
 ```bash
 npm install
 npm run dev
 ```
 
-LAN testing:
+For local network/tablet testing:
 
 ```bash
 npm run dev:lan

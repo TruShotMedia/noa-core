@@ -7,5 +7,7 @@ contextBridge.exposeInMainWorld('noa', {
   testNotion: () => ipcRenderer.invoke('noa:test-notion'),
   sendChat: (payload) => ipcRenderer.invoke('noa:chat', payload),
   getDiagnostics: () => ipcRenderer.invoke('noa:get-diagnostics'),
+  startupHealthCheck: () => ipcRenderer.invoke('noa:startup-health-check'),
+  getKnowledgeGraph: () => ipcRenderer.invoke('noa:get-knowledge-graph'),
   checkForUpdates: () => ipcRenderer.invoke('noa:check-for-updates')
 });

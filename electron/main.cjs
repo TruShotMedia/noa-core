@@ -28,6 +28,11 @@ let diagnostics = {
   lastNotionStatus: 'Not tested',
   lastNotionError: null,
   lastNotionRequestAt: null,
+  startupHealthStatus: 'Not run',
+  startupHealthCheckedAt: null,
+  weatherOnline: false,
+  webSearchOnline: false,
+  memoryOnline: false,
   lastIntent: 'none',
   lastConfidence: 0,
   lastApiRequestAt: null,
@@ -35,7 +40,10 @@ let diagnostics = {
   lastApiLatencyMs: null,
   lastApiError: null,
   lastResponseSource: 'none',
-  toolsRegistered: 14,
+  toolsRegistered: 16,
+  knowledgeGraphStatus: 'Not built',
+  entityCount: 0,
+  relationCount: 0,
   memoryEntries: 0,
   lastToolName: 'none',
   lastToolStatus: 'idle',
@@ -89,7 +97,16 @@ function createWindow() {
   if (isDev) mainWindow.loadURL('http://127.0.0.1:5173');
   else mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
-app.whenReady().then(() => { updateDiagnosticsFromStore(); createWindow(); app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); }); });
+app.whenReady().then(() => {
+  updateDiagnosticsFromStore();
+  diagnostics.startupHealthStatus = 'Checking';
+  createWindow();
+  runStartupHealthCheck().catch((error) => {
+    diagnostics.startupHealthStatus = 'Failed';
+    diagnostics.lastToolError = error.message || String(error);
+  });
+  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.handle('noa:get-settings', async () => safeSettings());
@@ -107,6 +124,99 @@ ipcMain.handle('noa:save-settings', async (_event, settings) => {
   return writeStore(next);
 });
 ipcMain.handle('noa:get-diagnostics', async () => { updateDiagnosticsFromStore(); return diagnostics; });
+ipcMain.handle('noa:startup-health-check', async () => runStartupHealthCheck());
+
+
+async function runStartupHealthCheck() {
+  const settings = readStore();
+  updateDiagnosticsFromStore(settings);
+  diagnostics.startupHealthStatus = 'Checking';
+  diagnostics.startupHealthCheckedAt = new Date().toISOString();
+  diagnostics.memoryOnline = true;
+
+  const checks = [];
+
+  checks.push((async () => {
+    if (!settings.openaiApiKey) {
+      diagnostics.provider = 'Local fallback';
+      diagnostics.brainOnline = false;
+      diagnostics.lastApiStatus = 'Missing API key';
+      return { name: 'OpenAI', ok: false, skipped: true };
+    }
+    const started = Date.now();
+    diagnostics.lastApiRequestAt = new Date().toISOString();
+    diagnostics.lastApiStatus = 'Startup check';
+    try {
+      await callOpenAI({ apiKey: settings.openaiApiKey, model: settings.openaiModel || defaultStore.openaiModel, input: 'Reply with exactly: online' });
+      diagnostics.provider = 'OpenAI';
+      diagnostics.brainOnline = true;
+      diagnostics.lastApiStatus = 'Success';
+      diagnostics.lastApiLatencyMs = Date.now() - started;
+      diagnostics.lastApiError = null;
+      return { name: 'OpenAI', ok: true };
+    } catch (error) {
+      diagnostics.provider = 'Local fallback';
+      diagnostics.brainOnline = false;
+      diagnostics.lastApiStatus = 'Failed';
+      diagnostics.lastApiLatencyMs = Date.now() - started;
+      diagnostics.lastApiError = error.message || String(error);
+      return { name: 'OpenAI', ok: false, error: diagnostics.lastApiError };
+    }
+  })());
+
+  checks.push((async () => {
+    if (!settings.notionApiKey || (!settings.notionTasksDatabaseId && !settings.notionJobsDatabaseId)) {
+      diagnostics.notionConnected = false;
+      diagnostics.lastNotionStatus = 'Not configured';
+      return { name: 'Notion', ok: false, skipped: true };
+    }
+    diagnostics.lastNotionRequestAt = new Date().toISOString();
+    diagnostics.lastNotionStatus = 'Startup check';
+    try {
+      const id = settings.notionTasksDatabaseId || settings.notionJobsDatabaseId;
+      await queryNotionDatabase(settings, id, { page_size: 1 });
+      diagnostics.notionConnected = true;
+      diagnostics.lastNotionStatus = 'Success';
+      diagnostics.lastNotionError = null;
+      return { name: 'Notion', ok: true };
+    } catch (error) {
+      diagnostics.notionConnected = false;
+      diagnostics.lastNotionStatus = 'Failed';
+      diagnostics.lastNotionError = error.message || String(error);
+      return { name: 'Notion', ok: false, error: diagnostics.lastNotionError };
+    }
+  })());
+
+  checks.push((async () => {
+    try {
+      const weather = await getWeather('weather in Brisbane');
+      diagnostics.weatherOnline = Boolean(weather.ok);
+      return { name: 'Weather', ok: Boolean(weather.ok) };
+    } catch (error) {
+      diagnostics.weatherOnline = false;
+      return { name: 'Weather', ok: false, error: error.message || String(error) };
+    }
+  })());
+
+  checks.push((async () => {
+    try {
+      const search = await webSearchLite('OpenAI');
+      diagnostics.webSearchOnline = Boolean(search.ok || search.note);
+      return { name: 'Web Search', ok: diagnostics.webSearchOnline };
+    } catch (error) {
+      diagnostics.webSearchOnline = false;
+      return { name: 'Web Search', ok: false, error: error.message || String(error) };
+    }
+  })());
+
+  const results = await Promise.all(checks);
+  const online = results.filter((r) => r.ok).length + 1; // memory is local and available if store loaded
+  diagnostics.startupHealthStatus = `${online}/5 online`;
+  diagnostics.lastToolName = 'startupHealthCheck';
+  diagnostics.lastToolStatus = online >= 3 ? 'success' : 'limited';
+  diagnostics.lastToolError = results.filter((r) => !r.ok && !r.skipped).map((r) => `${r.name}: ${r.error || 'unavailable'}`).join(' | ') || null;
+  return { ok: online >= 3, results: [{ name: 'Memory', ok: true }, ...results], diagnostics };
+}
 
 ipcMain.handle('noa:test-openai', async () => {
   const settings = readStore();
@@ -145,6 +255,21 @@ ipcMain.handle('noa:test-notion', async () => {
   } catch (error) {
     diagnostics.notionConnected = false; diagnostics.lastNotionStatus = 'Failed'; diagnostics.lastNotionError = error.message || String(error);
     return { ok: false, ...diagnostics };
+  }
+});
+
+
+ipcMain.handle('noa:get-knowledge-graph', async () => {
+  const settings = readStore();
+  try {
+    const graph = await getKnowledgeGraph(settings);
+    diagnostics.knowledgeGraphStatus = graph.ok ? 'Ready' : 'Limited';
+    diagnostics.entityCount = graph.entities?.length || 0;
+    diagnostics.relationCount = graph.relations?.length || 0;
+    return graph;
+  } catch (error) {
+    diagnostics.knowledgeGraphStatus = 'Failed';
+    return { ok: false, tool: 'getKnowledgeGraph', error: error.message || String(error), entities: [], relations: [], clusters: [] };
   }
 });
 
@@ -191,6 +316,7 @@ ipcMain.handle('noa:check-for-updates', async () => {
 function routeIntent(message) {
   const m = message.toLowerCase();
   if (m.includes('remember')) return { intent: 'remember', confidence: 92 };
+  if (m.includes('knowledge graph') || m.includes('relationship map') || m.includes('entities') || m.includes('map my workspace') || m.includes('client map')) return { intent: 'knowledge_graph', confidence: 91 };
   if (m.includes('weather') || m.includes('forecast') || m.includes('temperature') || m.includes('rain')) return { intent: 'weather_lookup', confidence: 91 };
   if (m.includes('notion') && (m.includes('test') || m.includes('connect'))) return { intent: 'notion_status', confidence: 88 };
   if (m.includes('briefing') || m.includes('what should i focus') || m.includes('focus on') || m.includes('attention') || m.includes('what is on today') || m.includes("what's on today") || m.includes('today')) return { intent: 'workspace_briefing', confidence: 92 };
@@ -215,7 +341,8 @@ async function executeToolForIntent(intent, message, settings) {
     workspace_briefing: 'getWorkspaceBriefing',
     client_intelligence: 'getClientIntelligence',
     due_soon: 'getDueSoon',
-    notion_status: 'testNotion'
+    notion_status: 'testNotion',
+    knowledge_graph: 'getKnowledgeGraph'
   };
   if (!toolMap[intent]) return null;
   const started = Date.now(); diagnostics.lastToolName = toolMap[intent]; diagnostics.lastToolStatus = 'running'; diagnostics.lastToolLatencyMs = null; diagnostics.lastToolError = null;
@@ -229,6 +356,7 @@ async function executeToolForIntent(intent, message, settings) {
     if (intent === 'client_intelligence') result = await getClientIntelligence(settings, message);
     if (intent === 'due_soon') result = await getDueSoon(settings, message);
     if (intent === 'notion_status') result = await getNotionStatus(settings);
+    if (intent === 'knowledge_graph') result = await getKnowledgeGraph(settings);
     diagnostics.lastToolStatus = result.ok ? 'success' : 'limited'; diagnostics.lastToolLatencyMs = Date.now() - started; diagnostics.lastToolError = result.ok ? null : result.error || result.note || 'Tool returned limited data.';
     return result;
   } catch (error) {
@@ -303,12 +431,14 @@ function pageToItem(page) {
   const dateEntry = entries.find(([name, p]) => p.type === 'date' && /due|date|deadline|schedule|when/i.test(name)) || entries.find(([, p]) => p.type === 'date');
   const statusEntry = entries.find(([name, p]) => ['status', 'select', 'checkbox'].includes(p.type) && /status|stage|done|complete|progress/i.test(name));
   const clientEntry = entries.find(([name]) => /client|customer|brand/i.test(name));
+  const priorityEntry = entries.find(([name]) => /priority|urgency|importance/i.test(name));
   return {
     id: page.id,
     title: propValue(titleEntry?.[1]) || 'Untitled',
     date: propValue(dateEntry?.[1]),
     status: propValue(statusEntry?.[1]) || '',
     client: propValue(clientEntry?.[1]) || '',
+    priority: propValue(priorityEntry?.[1]) || '',
     url: page.url,
     updatedAt: page.last_edited_time
   };
@@ -394,12 +524,75 @@ async function getNotionStatus(settings) {
   })();
 }
 
+
+function upsertEntity(map, id, label, type, weight = 1, meta = {}) {
+  if (!id || !label) return;
+  const key = `${type}:${String(id).toLowerCase()}`;
+  const existing = map.get(key) || { id: key, label, type, weight: 0, meta: {} };
+  existing.weight += weight;
+  existing.meta = { ...existing.meta, ...meta };
+  map.set(key, existing);
+}
+function addRelation(relations, from, to, type, weight = 1) {
+  if (!from || !to || from === to) return;
+  const key = `${from}->${to}:${type}`;
+  const existing = relations.get(key) || { id: key, from, to, type, weight: 0 };
+  existing.weight += weight;
+  relations.set(key, existing);
+}
+function splitClientValues(value) {
+  return String(value || '').split(',').map((x) => x.trim()).filter(Boolean);
+}
+function entityId(type, label) { return `${type}:${String(label || '').toLowerCase()}`; }
+async function getKnowledgeGraph(settings) {
+  const tasksResult = settings.notionTasksDatabaseId ? await getNotionTasks(settings, 'all tasks') : { ok: true, items: [] };
+  const jobsResult = settings.notionJobsDatabaseId ? await getNotionJobs(settings, 'jobs') : { ok: true, items: [] };
+  const entities = new Map();
+  const relations = new Map();
+  upsertEntity(entities, 'noa', 'NoA Core', 'system', 6);
+  upsertEntity(entities, 'notion', 'Notion', 'integration', settings.notionApiKey ? 5 : 1);
+  addRelation(relations, 'system:noa', 'integration:notion', 'connects_to', settings.notionApiKey ? 4 : 1);
+
+  const addItem = (item, kind) => {
+    const itemType = kind === 'job' ? 'job' : 'task';
+    const itemKey = entityId(itemType, item.title);
+    upsertEntity(entities, item.title, item.title, itemType, 2, { status: item.status, date: item.date, url: item.url });
+    addRelation(relations, 'integration:notion', itemKey, 'contains', 1);
+    if (item.date) {
+      const bucket = daysFromToday(item.date) === 0 ? 'Today' : inNextDays(item.date, 7) ? 'This Week' : daysFromToday(item.date) < 0 ? 'Overdue' : 'Later';
+      const bucketKey = entityId('time', bucket);
+      upsertEntity(entities, bucket, bucket, 'time', 1);
+      addRelation(relations, itemKey, bucketKey, 'scheduled_for', 1);
+    }
+    if (item.status) {
+      const statusKey = entityId('status', item.status);
+      upsertEntity(entities, item.status, item.status, 'status', 1);
+      addRelation(relations, itemKey, statusKey, 'has_status', 1);
+    }
+    for (const client of splitClientValues(item.client)) {
+      const clientKey = entityId('client', client);
+      upsertEntity(entities, client, client, 'client', 3);
+      addRelation(relations, clientKey, itemKey, kind === 'job' ? 'has_job' : 'has_task', 2);
+    }
+  };
+  (tasksResult.items || []).forEach((item) => addItem(item, 'task'));
+  (jobsResult.items || []).forEach((item) => addItem(item, 'job'));
+
+  const list = Array.from(entities.values()).sort((a, b) => b.weight - a.weight).slice(0, 80);
+  const relList = Array.from(relations.values()).sort((a, b) => b.weight - a.weight).slice(0, 120);
+  const clusters = ['client', 'job', 'task', 'time', 'status', 'integration'].map((type) => ({ type, count: list.filter((x) => x.type === type).length })).filter((x) => x.count);
+  diagnostics.knowledgeGraphStatus = 'Ready';
+  diagnostics.entityCount = list.length;
+  diagnostics.relationCount = relList.length;
+  return { ok: true, tool: 'getKnowledgeGraph', provider: 'Notion + NoA', entities: list, relations: relList, clusters, sourceCounts: { tasks: tasksResult.items?.length || 0, jobs: jobsResult.items?.length || 0 } };
+}
+
 function buildToolContext(intent, settings, diag, toolResult) {
   const memories = Array.isArray(settings.memories) ? settings.memories.slice(-12) : [];
   return {
     intent,
     diagnostics: { provider: diag.provider, apiKeySaved: Boolean(settings.openaiApiKey), model: settings.openaiModel || defaultStore.openaiModel, notionConnected: diag.notionConnected, notionConfigured: Boolean(settings.notionApiKey && (settings.notionTasksDatabaseId || settings.notionJobsDatabaseId)), toolsRegistered: diag.toolsRegistered, memoryEntries: memories.length, lastToolName: diag.lastToolName, lastToolStatus: diag.lastToolStatus },
-    availableTools: ['getTodaysBriefing', 'getWorkspaceBriefing', 'getClientIntelligence', 'getDueSoon', 'getSystemStatus', 'listTools', 'rememberContext', 'getWeather', 'webSearchLite', 'memoryLookup', 'diagnosticsStatus', 'getNotionTasks', 'getNotionJobs', 'getCombinedBriefing'],
+    availableTools: ['getTodaysBriefing', 'getWorkspaceBriefing', 'getClientIntelligence', 'getDueSoon', 'getSystemStatus', 'listTools', 'rememberContext', 'getWeather', 'webSearchLite', 'memoryLookup', 'diagnosticsStatus', 'getNotionTasks', 'getNotionJobs', 'getCombinedBriefing', 'getKnowledgeGraph'],
     prototypeBriefing: { activeJobs: 3, outstandingTasks: 7, meetings: 1, priorityFocus: 'Connect Notion and Optra data so Noah can brief from live systems.' },
     memories,
     toolResult
@@ -407,7 +600,7 @@ function buildToolContext(intent, settings, diag, toolResult) {
 }
 function buildNoahPrompt({ message, history, toolContext }) {
   return [
-    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'For workspace briefings, group information into: immediate focus, overdue/today, upcoming this week, and recommended next move.', 'For client intelligence, summarise jobs and tasks connected to that client or keyword.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
+    { role: 'system', content: ['You are Noah, the spoken AI assistant inside NoA, John Herholdt’s Noetic Advisor desktop app.', 'NoA is the visual system name. Noah is the natural voice/conversation identity.', 'Speak warmly, naturally and directly. Do not sound like a diagnostic terminal.', 'Do not end replies with intent/source/confidence unless the user asks for technical detail.', 'Be honest about what is live data and what is prototype data.', 'Use toolResult data when provided. If Notion data is provided, summarise the real tasks/jobs clearly and practically.', 'For workspace briefings, group information into: immediate focus, overdue/today, upcoming this week, and recommended next move.', 'For client intelligence, summarise jobs and tasks connected to that client or keyword.', 'When knowledge graph data is provided, explain the important relationships between clients, tasks, jobs, time buckets and statuses.', 'If Notion is not configured, explain what setting is missing.', 'Keep replies practical, conversational and useful.'].join('\n') },
     { role: 'user', content: [`Current user message: ${message}`, '', `Recent conversation: ${JSON.stringify(history)}`, '', `NoA tool/context state: ${JSON.stringify(toolContext, null, 2)}`].join('\n') }
   ];
 }
@@ -456,6 +649,7 @@ function localFallbackResponse(intent, context) {
     if (tr?.ok && tr.results) return tr.results.map((r) => r.ok ? `${r.tool}:\n${formatItems(r.tool.includes('Task') ? 'tasks' : 'jobs', r.items)}` : r.note).join('\n\n');
     const brief = context.prototypeBriefing; return `Here’s your prototype briefing: ${brief.activeJobs} active jobs, ${brief.outstandingTasks} outstanding tasks and ${brief.meetings} meeting. Priority focus: ${brief.priorityFocus}`;
   }
+  if (intent === 'knowledge_graph') return tr?.ok ? `I built a workspace knowledge graph with ${tr.entities?.length || 0} entities and ${tr.relations?.length || 0} relationships. Key clusters: ${(tr.clusters || []).map((c) => `${c.type} (${c.count})`).join(', ')}.` : `I couldn't build the knowledge graph yet: ${tr?.error || tr?.note || 'unknown issue'}`;
   if (intent === 'notion_status') return tr?.ok ? 'Notion is connected and at least one configured database is reachable.' : `Notion is not ready yet: ${tr?.note || tr?.error || 'check settings.'}`;
   if (intent === 'system_status') return 'NoA is running. Diagnostics, memory, OpenAI bridge, local tools, weather, lightweight web search and Workspace Intelligence are available in Alpha 1.0.';
   if (intent === 'tool_list') return `Right now I can use: ${context.availableTools.join(', ')}.`;
